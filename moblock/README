@@ -1,11 +1,13 @@
 
-MoBlock README v0.2
+MoBlock README v0.4
 http://moblock.berlios.de
 
 .Introduction.
 
    MoBlock is a linux console application that blocks connections from/to hosts
-   listed in a file in peerguardian format (guarding.p2p).
+   listed in a file in peerguardian format (guarding.p2p) and since version
+   0.4 it supports new peerguardian 2.x files ( p2p.p2b ) and ipfilter.dat
+   files.
    It uses iptables ipqueue library and it is very light in resource
    usage. I test it on an old Celeron 400 Mhz and its cpu usage has only spikes
    at 5% under normal usage (edonkey, bittorrent etc...).
@@ -24,13 +26,13 @@ http://moblock.berlios.de
 	ip_tables              14496  2 iptable_filter,ipt_state
 	ip_queue                7608  0
 
-2) A valid guarding.p2p host file in /etc ( /etc/guarding.p2p ).
+2) A valid guarding.p2p/ipfilter.dat/p2p.p2b host file in /etc ( /etc/guarding.p2p ).
    MoBlock tries to skip malformed or duplicate ranges but
    if it founds something unexpected it segfaults :P
    
    Update: Thanks to Andrew de Quincey patch MoBlock now uses regular
-   expressions to load the guarding file so this should not be
-   a problem anymore.
+   expressions to load guarding.p2p files so this should not be
+   a problem anymore for these lists.
    In my tests i used lists from http://methlabs.org
 
 3) Minimum iptables knowledge (or trust my start script).
@@ -64,7 +66,11 @@ http://moblock.berlios.de
    make
    cp MoBlock ../
 
-   Binary version is compiled on Slackware 10.0 current with gcc 3.4.2
+   Binary version is compiled on Slackware 10.1 with gcc 3.4.3
+   There is also a statically compiled version, "MoBlock.static", if you
+   want to use it just rename it to "MoBlock" (deleting/renaming the
+   original MoBlock).
+
    To start it just launch MoBlock.sh as root, for example:
 
    ./MoBlock.sh &
@@ -72,7 +78,19 @@ http://moblock.berlios.de
    By default it will load the block list from /etc/guarding.p2p and
    will log its activity to ./MoBlock.log, you can edit MoBlock.sh if you
    want to change them.
-   
+   For example if you want to use new p2p.pdb files change this line into
+   the start script:
+
+   ./MoBlock /etc/guarding.p2p MoBlock.log
+
+   into this:
+
+   ./MoBlock -n /etc/p2p.p2b MoBlock.log
+
+   or if you want to use ipfilter.dat files:
+
+   ./MoBlock -d /etc/ipfilter.dat MoBlock.log
+
    To stop it:
 
    kill -HUP <MoBlockPid> 
@@ -96,4 +114,4 @@ http://moblock.berlios.de
 - Andrew de Quincey (adq at lidskialf dot net) for regular expressions
   and command line args patch
 
-Last Updated: 16/12/2004
+Last Updated: 06/03/2005

@@ -1,5 +1,5 @@
 
-CFLAGS=-O3 -march=i586 -ffast-math -D_GNU_SOURCE
+CFLAGS=-Wall -O2 -march=i586 -mcpu=i686 -fomit-frame-pointer -ffast-math -D_GNU_SOURCE -L/usr/include/libipq
 CC=gcc
 
 all: MoBlock
@@ -13,4 +13,3 @@ clean:
 	rm -f *.o *~ *# MoBlock
 
 .PHONY: clean
-

@@ -36,10 +36,10 @@
 #include <signal.h>
 #include <regex.h>
 
-#define MB_VERSION 0.3
+#define MB_VERSION	"0.4"
 
-#define BUFSIZE 2048
-#define PAYLOADSIZE 21
+#define BUFSIZE		2048
+#define PAYLOADSIZE	21
 
 #define IS_UDP (packet->payload[9] == 17)
 #define IS_TCP (packet->payload[9] == 6)
@@ -59,7 +59,7 @@ typedef enum {
 typedef unsigned long keyType;            /* type of key */
                 
 typedef struct {
-    char blockname[50];                  /* data */
+    char blockname[60];                  /* data */
     unsigned long ipmax;
     int hits;
 } recType;   
@@ -108,7 +108,7 @@ void ranged_insert(char *name,char *ipmin,char *ipmax)
     recType tmprec;
     int ret;
 
-    strncpy(tmprec.blockname,name,50);		// 50 = recType.blockname lenght
+    strncpy(tmprec.blockname,name,60);		// 60 = recType.blockname lenght
     tmprec.ipmax=ntohl(inet_addr(ipmax));
     tmprec.hits=0;
     if ( (ret=insert(ntohl(inet_addr(ipmin)),&tmprec)) != STATUS_OK  )
@@ -127,7 +127,7 @@ void ranged_insert(char *name,char *ipmin,char *ipmax)
 }
 
 
-void loadlist(char* filename)
+void loadlist_pg1(char* filename)
 {
 	FILE *fp;
 	ssize_t count;
@@ -175,6 +175,79 @@ void loadlist(char* filename)
 	fclose(fp);
 	fprintf(logfile,"Ranges loaded: %d\n",ntot);
 	fflush(logfile);
+}
+
+void loadlist_pg2(char *filename)		// experimental, no check for list sanity
+{
+    FILE *fp;
+    int i,retval,ntot=0;
+    char name[100],ipmin[16];			// hope we don't have a list with longer names...
+    uint32_t start_ip, end_ip;
+    struct in_addr startaddr,endaddr;
+
+    fp=fopen(filename,"r");
+    if ( fp == NULL ) {
+        fprintf(logfile,"Error opening %s, aborting...\n", filename);
+        exit(-1);
+    }
+                                        
+    fgetc(fp);					// skip first 4 bytes, don't know what they are
+    fgetc(fp);
+    fgetc(fp);
+    retval=fgetc(fp);
+
+    while ( retval != EOF ) {
+        i=0;
+        do {
+            name[i]=fgetc(fp);
+            i++;
+        } while ( name[i-1] != 0x00 && name[i-1] != EOF);
+        if ( name[i-1] != EOF ) {
+            name[i-1]='\0';
+            fread(&start_ip,4,1,fp);
+            fread(&end_ip,4,1,fp);
+            startaddr.s_addr=start_ip;
+            endaddr.s_addr=end_ip;
+            strcpy(ipmin,inet_ntoa(startaddr));
+            ranged_insert(name,ipmin,inet_ntoa(endaddr));
+            ntot++;
+        }
+        else {
+            retval=EOF;
+        }
+    }
+    fclose(fp);
+    fprintf(logfile,"Ranges loaded: %d\n",ntot);
+    fflush(logfile);
+}
+
+void loadlist_dat(char *filename)
+{
+    FILE *fp;
+    int ntot=0;
+    char readbuf[200], *name, start_ip[16], end_ip[16];
+    unsigned short ip1_0, ip1_1, ip1_2, ip1_3, ip2_0, ip2_1, ip2_2, ip2_3;
+    
+    fp=fopen(filename,"r");
+    if ( fp == NULL ) {
+        fprintf(logfile,"Error opening %s, aborting...\n", filename);
+        exit(-1);
+    }
+    
+    while ( fgets(readbuf,200,fp) != NULL ) {
+        if ( readbuf[0] == '#') continue;		// comment line, skip
+        sscanf(readbuf,"%hd.%hd.%hd.%hd - %hd.%hd.%hd.%hd", &ip1_0, &ip1_1, &ip1_2, &ip1_3,
+                                                            &ip2_0, &ip2_1, &ip2_2, &ip2_3);
+        name=readbuf+42;
+        name[strlen(name)-1]='\0';		// strip ending \n
+        sprintf(start_ip,"%d.%d.%d.%d",ip1_0, ip1_1, ip1_2, ip1_3);
+        sprintf(end_ip,"%d.%d.%d.%d",ip2_0, ip2_1, ip2_2, ip2_3);
+        ranged_insert(name, start_ip, end_ip);
+        ntot++;
+    }
+    fclose(fp);
+    fprintf(logfile,"Ranges loaded: %d\n",ntot);
+    fflush(logfile);                                        
 }
 
 void my_sahandler(int sig)
@@ -235,19 +308,30 @@ int main(int argc, char **argv)
         struct ipq_handle *h;
         ipq_packet_msg_t *packet;
 
-	if (argc != 3) {
-		fprintf(stderr, "\nSyntax: MoBlock <blocklist> <logfile>\n\n");
+	if (argc < 3) {
+	        fprintf(stderr, "\nMoBlock %s",MB_VERSION);
+		fprintf(stderr, "\nSyntax: MoBlock [-dn] <blocklist> <logfile>\n\n");
+		fprintf(stderr, "\t-d\tblocklist is an ipfilter.dat file\n");
+		fprintf(stderr, "\t-n\tblocklist is a peerguardian 2.x file (.p2b)\n\n");
 		exit(1);
 	}
 
-	logfile = fopen(argv[2], "a");
-	if (logfile == NULL) {
-		fprintf(stderr, "Unable to open logfile %s\n", argv[2]);
-		exit(1);
-	}
+	if (argc == 3 )
+	    logfile = fopen(argv[2], "a");
+        else logfile = fopen(argv[3], "a");
+        
+        if (logfile == NULL) {
+	    fprintf(stderr, "Unable to open logfile %s\n", argv[2]);
+	    exit(-1);
+        }
    
 	init_sa();	
-	loadlist(argv[1]);
+	
+	if ( !strcmp(argv[1],"-d") )	// ipfilter.dat file format
+	    loadlist_dat(argv[2]);
+        else if ( !strcmp(argv[1],"-n")	)	// peerguardian 2.x file format
+                  loadlist_pg2(argv[2]);
+             else loadlist_pg1(argv[1]);	// no -dn options
 	
         h = ipq_create_handle(0, PF_INET);
         if (!h)

@@ -19,7 +19,7 @@
 #include <stdarg.h>
 #include <time.h>
 
-#define RBT_VERSION 0.3
+#define RBT_VERSION 0.4
 
 /* implementation dependend declarations */
 typedef enum {
@@ -33,7 +33,7 @@ typedef unsigned long keyType;            /* type of key */
 
 /* user data stored in tree */
 typedef struct {
-    char blockname[50];                  /* optional related data */
+    char blockname[60];                  /* optional related data */
     unsigned long ipmax;
     int hits;
 } recType;
@@ -97,12 +97,6 @@ void ll_show(FILE *logf)
     ll_node *current=ll_top;
     time_t tp;
     
-/*    while( current != NULL ) {
-        fprintf(logf,"%s - %d hits\n",current->rbt_node->rec.blockname,
-          current->rbt_node->rec.hits);
-        current=current->next;
-    }
-*/
     tp=time(NULL);
     fprintf(logf,"\n%s MoBlock Stats\n\n",ctime(&tp));
     
