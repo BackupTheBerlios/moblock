@@ -1,0 +1,79 @@
+
+MoBlock README v0.1
+http://moblock.berlios.de
+
+.Introduction.
+
+   MoBlock is a linux console application that blocks connections from/to hosts
+   listed in a file in peerguardian format (guarding.p2p).
+   It uses iptables ipqueue library and it is very light in resource
+   usage. I test it on an old Celeron 400 Mhz and its cpu usage has only spikes
+   at 5% under normal usage (edonkey, bittorrent etc...).
+
+
+.Requirements.
+
+1) iptables and kernel support for connection and state tracking (
+   ip_conntrack,ipt_state) and ip_queue kernel modules/built-in.
+   This are the kernel modules i have with MoBlock running
+   on 2.6.9-ac6:
+	
+	iptable_filter          2016  1
+	ipt_state               1312  4
+	ip_conntrack           37716  1 ipt_state
+	ip_tables              14496  2 iptable_filter,ipt_state
+	ip_queue                7608  0
+
+2) A valid guarding.p2p host file in /etc ( /etc/guarding.p2p ).
+   MoBlock tries to skip malformed or duplicate ranges but
+   if it founds something unexpected it segfaults :P
+   In my tests i used lists from http://methlabs.org
+
+3) Minimum iptables knowledge (or trust my start script).
+   MoBlock filter only packets that are QUEUEd with iptables. So it's up
+   to you to choose what traffic you want to be filtered.
+   For example if you want MoBlock to filter all the new TCP connections
+   that are initiated from your box:
+
+	iptables -A OUTPUT -p tcp -m state --state NEW -j QUEUE
+
+   A simple start script (MoBlock.sh) is provided that makes MoBlock
+   filter all new incoming and outgoing connections, both for tcp and udp.
+   
+   !!! While MoBlock is active it is needed an explicit iptables rule to
+   accept localhost-to-locahost connections:
+   
+   iptables -I INPUT -p tcp -s 127.0.0.1 -d 127.0.0.1 -j ACCEPT
+   iptables -I INPUT -p udp -s 127.0.0.1 -d 127.0.0.1 -j ACCEPT
+   
+   They will be dropped with a connection reset if you don't ACCEPT them.
+   I'm still investigating about this issue. 
+   Provided start script has already these rules.
+
+
+.Installation & Usage.
+
+   Just untar somwhere.
+   To build MoBlock from sources launch build.sh, binary version
+   is compiled with it on Slackware 10.0 current with gcc 3.4.2
+   Start MoBlock.sh as root, for example with screen:
+
+   screen -dmS mb ./MoBlock.sh
+
+   To stop it:
+
+   kill -HUP <MoBlockPid>
+
+   To obtain stats about blocked ranges while it's running:
+
+   kill -USR1 <MoBlockPid>	# write stats to stdout
+   kill -USR2 <MoBlockPid>      # write stats to /var/log/MoBlock.log
+
+
+.Credits.
+
+- Thomas Niemann (thomasn at epaperpress.com) for the red/black trees
+  free implementation, used to store and search ip ranges. You can 
+  find it at www.oopweb.com
+- Chris Lowth, developer of FTwall (www.lowth.com/p2pwall), i 
+  took some code and ideas from his FTwall.
