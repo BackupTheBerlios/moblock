@@ -4,13 +4,7 @@
  * Author: Thomas Niemann <thomasn at epaperpress.com>
  * Modified by: Morpheus <ebutera at users.berlios.de>
  *
- * From Thomas guide about reb-black trees on oopweb.com:
- *
- * "Source code, when part of a software project, may be used 
- * freely without reference to the author.
- *
- * Thomas Niemann
- * Portland, Oregon"
+ * Original code by Thomas and my changes are public domain.
  */
 
 #include <stdio.h>
