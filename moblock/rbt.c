@@ -4,7 +4,13 @@
  * Author: Thomas Niemann <thomasn at epaperpress.com>
  * Modified by: Morpheus <ebutera at users.berlios.de>
  *
- * Original code by Thomas and my changes are public domain.
+ * From Thomas guide about reb-black trees on oopweb.com:
+ *
+ * "Source code, when part of a software project, may be used 
+ * freely without reference to the author.
+ *
+ * Thomas Niemann
+ * Portland, Oregon"
  */
 
 #include <stdio.h>
@@ -13,7 +19,7 @@
 #include <stdarg.h>
 #include <time.h>
 
-#define RBT_VERSION 0.2
+#define RBT_VERSION 0.3
 
 /* implementation dependend declarations */
 typedef enum {
@@ -86,15 +92,27 @@ short int ll_insert(nodeType *nt)
       return(0);
 }
 
-void ll_show()
+void ll_show(FILE *logf)
 {
     ll_node *current=ll_top;
-
-    while( current != NULL ) {
-        fprintf(stdout,"%s - %d hits\n",current->rbt_node->rec.blockname,
+    time_t tp;
+    
+/*    while( current != NULL ) {
+        fprintf(logf,"%s - %d hits\n",current->rbt_node->rec.blockname,
           current->rbt_node->rec.hits);
         current=current->next;
     }
+*/
+    tp=time(NULL);
+    fprintf(logf,"\n%s MoBlock Stats\n\n",ctime(&tp));
+    
+    while( current != NULL ) {
+        fprintf(logf,"   %s - %d hits\n",current->rbt_node->rec.blockname,
+                                       current->rbt_node->rec.hits);
+        current=current->next;
+    }
+    fprintf(logf,"----------------------------------------\n");
+    fflush(logf);
 }
 
 void ll_log()
@@ -103,9 +121,9 @@ void ll_log()
     FILE *fp;
     time_t tp;
     
-    fp=fopen("/var/log/MoBlock.log","a");
+    fp=fopen("/var/log/MoBlock.stats","a");
     if ( fp == NULL ) {
-        fprintf(stderr,"Error opening stats file /var/log/MoBlock.log\n");
+        fprintf(stderr,"Error opening stats file /var/log/MoBlock.stats\n");
         perror("ll_log");
         return;
     }
@@ -119,7 +137,7 @@ void ll_log()
     }
     fprintf(fp,"----------------------------------------\n");
     if ( fclose(fp) != 0 ) {
-        perror("Error closing stats file /var/log/MoBlock.log");
+        perror("Error closing stats file /var/log/MoBlock.stats");
         return;
     }
 }

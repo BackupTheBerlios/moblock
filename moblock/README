@@ -1,5 +1,5 @@
 
-MoBlock README v0.1
+MoBlock README v0.2
 http://moblock.berlios.de
 
 .Introduction.
@@ -27,6 +27,10 @@ http://moblock.berlios.de
 2) A valid guarding.p2p host file in /etc ( /etc/guarding.p2p ).
    MoBlock tries to skip malformed or duplicate ranges but
    if it founds something unexpected it segfaults :P
+   
+   Update: Thanks to Andrew de Quincey patch MoBlock now uses regular
+   expressions to load the guarding file so this should not be
+   a problem anymore.
    In my tests i used lists from http://methlabs.org
 
 3) Minimum iptables knowledge (or trust my start script).
@@ -54,20 +58,32 @@ http://moblock.berlios.de
 .Installation & Usage.
 
    Just untar somwhere.
-   To build MoBlock from sources launch build.sh, binary version
-   is compiled with it on Slackware 10.0 current with gcc 3.4.2
-   Start MoBlock.sh as root, for example with screen:
+   To build MoBlock from sources just do:
+   
+   cd src
+   make
+   cp MoBlock ../
 
-   screen -dmS mb ./MoBlock.sh
+   Binary version is compiled on Slackware 10.0 current with gcc 3.4.2
+   To start it just launch MoBlock.sh as root, for example:
 
+   ./MoBlock.sh &
+
+   By default it will load the block list from /etc/guarding.p2p and
+   will log its activity to ./MoBlock.log, you can edit MoBlock.sh if you
+   want to change them.
+   
    To stop it:
 
-   kill -HUP <MoBlockPid>
+   kill -HUP <MoBlockPid> 
+   or
+   kill -TERM <MoBlockPid>
 
+   While shutting down it will dump some stats to /var/log/MoBlock.stats
    To obtain stats about blocked ranges while it's running:
 
-   kill -USR1 <MoBlockPid>	# write stats to stdout
-   kill -USR2 <MoBlockPid>      # write stats to /var/log/MoBlock.log
+   kill -USR1 <MoBlockPid>	# write stats to logfile
+   kill -USR2 <MoBlockPid>      # write stats to /var/log/MoBlock.stats
 
 
 .Credits.
@@ -76,4 +92,8 @@ http://moblock.berlios.de
   free implementation, used to store and search ip ranges. You can 
   find it at www.oopweb.com
 - Chris Lowth, developer of FTwall (www.lowth.com/p2pwall), i 
-  took some code and ideas from his FTwall.
+  took some code and ideas from his FTwall
+- Andrew de Quincey (adq at lidskialf dot net) for regular expressions
+  and command line args patch
+
+Last Updated: 16/12/2004

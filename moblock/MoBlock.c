@@ -34,8 +34,9 @@
 #include <linux/netfilter_ipv4.h>
 #include <libipq.h>
 #include <signal.h>
+#include <regex.h>
 
-#define MB_VERSION 0.2
+#define MB_VERSION 0.3
 
 #define BUFSIZE 2048
 #define PAYLOADSIZE 21
@@ -55,8 +56,6 @@ typedef enum {
     STATUS_KEY_NOT_FOUND 
 } statusEnum;
                 
-//typedef enum { BLACK, RED } nodeColor;
-
 typedef unsigned long keyType;            /* type of key */
                 
 typedef struct {
@@ -67,10 +66,12 @@ typedef struct {
 
 extern statusEnum find(keyType key, recType *rec);
 extern statusEnum insert(keyType key, recType *rec);
-extern void ll_show();
+extern void ll_show(FILE *logf);
 extern void ll_log();
 
 // end of headers
+
+static FILE* logfile;
 
 static void die(struct ipq_handle *h)
 {
@@ -113,60 +114,88 @@ void ranged_insert(char *name,char *ipmin,char *ipmax)
     if ( (ret=insert(ntohl(inet_addr(ipmin)),&tmprec)) != STATUS_OK  )
         switch(ret) {
             case STATUS_MEM_EXHAUSTED:
-                fprintf(stderr,"Error inserting range, MEM_EXHAUSTED.\n");
+                fprintf(logfile,"Error inserting range, MEM_EXHAUSTED.\n");
                 break;
             case STATUS_DUPLICATE_KEY:
-                fprintf(stderr,"Duplicated range ( %s )\n",name);
+                fprintf(logfile,"Duplicated range ( %s )\n",name);
                 break;
             default:
-                fprintf(stderr,"Unexpected return value from ranged_insert()!\n");
-                fprintf(stderr,"Return value was: %d\n",ret);
+                fprintf(logfile,"Unexpected return value from ranged_insert()!\n");
+                fprintf(logfile,"Return value was: %d\n",ret);
                 break;
         }                
-    //else printf("Inserted: %lu|%lu|\n",ntohl(inet_addr(ipmin)),tmprec.ipmax);
 }
 
 
-void loadlist(void)
+void loadlist(char* filename)
 {
 	FILE *fp;
 	ssize_t count;
 	char *line = NULL;
         size_t len = 0;
 	int ntot=0;
-	char name[50],ipmin[16],ipmax[16];		// ! name lenght = recType.blockname lenght (rbt.h) !
-	
-	fp=fopen("/etc/guarding.p2p","r");
+	regex_t regmain;
+	regmatch_t matches[4];
+	int i;
+
+	regcomp(&regmain, "^(.*)[:]([0-9.]*)[-]([0-9.]*)$", REG_EXTENDED);
+
+	fp=fopen(filename,"r");
 	if ( fp == NULL ) {
-		fprintf(stderr,"Error opening /etc/guarding.p2p, aborting...\n");
+		fprintf(logfile,"Error opening %s, aborting...\n", filename);
 		exit(-1);
 	}
 	while ( (count=getline(&line,&len,fp)) != -1 ) {
-		if ( count > 10 )
-		{
-			strncpy(name,strtok(line,":"),50);		// !! with malformed guarding.p2p it segfaults !!
-			strncpy(ipmin,strtok(NULL,"-"),16);
-			strncpy(ipmax,strtok(NULL,"\n"),16);
-			ranged_insert(name,ipmin,ipmax);
+		for(i=count-1; i>=0; i--) {
+			if ((line[i] == '\r') || (line[i] == '\n') || (line[i] == ' ')) {
+				line[i] = 0;
+			} else {
+				break;
+			}
+		}
+	   
+		if (strlen(line) == 0)
+			continue;
+
+		if (!regexec(&regmain, line, 4, matches, 0)) {
+			line[matches[1].rm_eo] = 0;
+			line[matches[2].rm_eo] = 0;
+			line[matches[3].rm_eo] = 0;
+
+			ranged_insert(line+matches[1].rm_so, 
+				      line+matches[2].rm_so, 
+				      line+matches[3].rm_so);
 			ntot++;
-		} else fprintf(stderr,"Short guarding.p2p line, skipping it...\n");
+		} else {
+			fprintf(logfile,"Short guarding.p2p line %s, skipping it...\n", line);
+		}
 	}
 	if (line)
 		free(line);
-	printf("Ranges loaded: %d\n",ntot);
+	fclose(fp);
+	fprintf(logfile,"Ranges loaded: %d\n",ntot);
+	fflush(logfile);
 }
 
 void my_sahandler(int sig)
 {
     switch( sig ) {
         case SIGUSR1:
-            printf("Got SIGUSR1!\n");
-            ll_show();
+            fprintf(logfile,"Got SIGUSR1! Dumping stats...\n");
+            ll_show(logfile);
             break;
         case SIGUSR2:
-            printf("Got SIGUSR2!\n");
+            fprintf(logfile,"Got SIGUSR2! Dumping stats to /var/log/MoBlock.stats\n");
             ll_log();
             break;
+        case SIGHUP:
+            fprintf(logfile,"Got SIGHUP! Dumping stats and exiting.\n");
+            ll_log();
+            exit(0);
+         case SIGTERM:
+            fprintf(logfile,"Got SIGTERM! Dumping stats and exiting.\n");
+            ll_log();
+            exit(0);
         default:
             fprintf(stderr,"Received signal = %d but not handled\n",sig);
             break;
@@ -188,6 +217,14 @@ void init_sa()
         perror("FATAL! Error setting signal handler for SIGUSR2\n");
         exit(-1);
     }
+    if ( sigaction(SIGHUP,&my_sa,NULL) < 0 ) {
+        perror("FATAL! Error setting signal handler for SIGHUP\n");
+        exit(-1);
+    }
+    if ( sigaction(SIGTERM,&my_sa,NULL) < 0 ) {
+        perror("FATAL! Error setting signal handler for SIGTERM\n");
+        exit(-1);
+    }
 }
 
 int main(int argc, char **argv)
@@ -197,9 +234,20 @@ int main(int argc, char **argv)
         recType tmprec;        
         struct ipq_handle *h;
         ipq_packet_msg_t *packet;
-	
+
+	if (argc != 3) {
+		fprintf(stderr, "\nSyntax: MoBlock <blocklist> <logfile>\n\n");
+		exit(1);
+	}
+
+	logfile = fopen(argv[2], "a");
+	if (logfile == NULL) {
+		fprintf(stderr, "Unable to open logfile %s\n", argv[2]);
+		exit(1);
+	}
+   
 	init_sa();	
-	loadlist();
+	loadlist(argv[1]);
 	
         h = ipq_create_handle(0, PF_INET);
         if (!h)
@@ -219,19 +267,20 @@ int main(int argc, char **argv)
         	                fprintf(stderr, "Received error message %d\n", ipq_get_msgerr(buf));
                                 break;
  			case IPQM_PACKET:
-//                                ipq_packet_msg_t *packet = ipq_get_packet(buf);
                                 packet=ipq_get_packet(buf);				
 				switch ( packet->hook ) {
                                     case NF_IP_LOCAL_IN:
                                            if ( find(ntohl(SRC_ADDR),&tmprec) == STATUS_OK ) {
                                                status=ipq_set_verdict(h,packet->packet_id,NF_DROP,0,NULL);
-                                               fprintf(stdout,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR));
+                                               fprintf(logfile,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR));
+                                               fflush(logfile);
                                            } else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
                                            break;
                                     case NF_IP_LOCAL_OUT:
                                            if ( find(ntohl(DST_ADDR),&tmprec) == STATUS_OK ) {
                                                status=ipq_set_verdict(h,packet->packet_id,NF_DROP,0,NULL);
-                                               fprintf(stdout,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR));
+                                               fprintf(logfile,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR));
+                                               fflush(logfile);
                                            } else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
                                            break;
                                     default:

@@ -4,6 +4,17 @@ http://moblock.berlios.de
 
 ---
 
+0.3: -added patches for regex blocklist loading, command line args and
+      Makefile from Andrew de Quincey ( adq at lidskialf dot net )
+     -Updated README and start script, now you can start it with
+	./MoBlock.sh &
+      by default it will load the block list from /etc/guarding.p2p and
+      will log to ./MoBlock.log
+      Edit the start script if you want to use other files.
+     -Stats always written on /var/log/MoBlock.stats on exit
+
+---
+
 0.2: first public release
 
 ---
