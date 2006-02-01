@@ -3,6 +3,7 @@
 # ---------------------------------
 
 # Be sure needed modules are loaded
+# Change ipt_NFQUEUE in ip_queue if you want to use the old interface
 
 modprobe ipt_NFQUEUE
 modprobe ipt_state
@@ -18,7 +19,7 @@ iptables -I INPUT -p all -i lo -j ACCEPT
 iptables -I OUTPUT -p all -o lo -j ACCEPT
 
 # Here you can change block list and log files
-./MoBlock -d /etc/ipfilter.dat ./MoBlock.log
+./MoBlock /etc/guarding.p2p ./MoBlock.log
 
 # On exit delete the rules we added
 
