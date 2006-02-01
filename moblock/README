@@ -81,11 +81,7 @@ http://moblock.berlios.de
 .Installation & Usage.
 
    Just untar somwhere.
-   To build MoBlock from sources just do:
-   
-   cd src
-   make
-   cp MoBlock ../
+   To build MoBlock from sources just do "make" in untar directory.
 
    The static version was compiled on Slackware 10.2 with gcc 3.4.5, if you
    don't want to install the libnetfilter libraries try it,just rename it
