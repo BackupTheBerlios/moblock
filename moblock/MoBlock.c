@@ -32,11 +32,20 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <linux/netfilter_ipv4.h>
-#include <libipq.h>
 #include <signal.h>
 #include <regex.h>
 
-#define MB_VERSION	"0.4"
+// in Makefile define LIBIPQ to use soon-to-be-deprecated ip_queue,
+// NFQUEUE for ipt_NFQUEUE (from kernel 2.6.14)
+
+#ifdef LIBIPQ
+	#include <libipq.h>
+#endif
+#ifdef NFQUEUE
+	#include <libnetfilter_queue/libnetfilter_queue.h>
+#endif
+
+#define MB_VERSION	"0.6"
 
 #define BUFSIZE		2048
 #define PAYLOADSIZE	21
@@ -44,8 +53,8 @@
 #define IS_UDP (packet->payload[9] == 17)
 #define IS_TCP (packet->payload[9] == 6)
 
-#define SRC_ADDR (*(in_addr_t *)((packet->payload)+12))
-#define DST_ADDR (*(in_addr_t *)((packet->payload)+16))
+#define SRC_ADDR(payload) (*(in_addr_t *)((payload)+12))
+#define DST_ADDR(payload) (*(in_addr_t *)((payload)+16))
 
 // rbt datatypes/functions
 
@@ -59,7 +68,7 @@ typedef enum {
 typedef unsigned long keyType;            /* type of key */
                 
 typedef struct {
-    char blockname[60];                  /* data */
+    char blockname[80];                  /* data */
     unsigned long ipmax;
     int hits;
 } recType;   
@@ -68,17 +77,25 @@ extern statusEnum find(keyType key, recType *rec);
 extern statusEnum insert(keyType key, recType *rec);
 extern void ll_show(FILE *logf);
 extern void ll_log();
+extern void ll_clear();
+extern void destroy_tree();
 
 // end of headers
 
 static FILE* logfile;
+struct {			//holds list type and filename
+	enum { LIST_DAT = 0, LIST_PG1, LIST_PG2} type;
+	char *filename;
+} blocklist_info;
 
+#ifdef LIBIPQ
 static void die(struct ipq_handle *h)
 {
-	ipq_perror("myblock");
+	ipq_perror("MoBlock");
         ipq_destroy_handle(h);
         exit(-1);
 }
+#endif
 
 char *ip2str(in_addr_t ip)
 {
@@ -108,7 +125,7 @@ void ranged_insert(char *name,char *ipmin,char *ipmax)
     recType tmprec;
     int ret;
 
-    strncpy(tmprec.blockname,name,60);		// 60 = recType.blockname lenght
+    strcpy(tmprec.blockname,name);		// 80 = recType.blockname lenght
     tmprec.ipmax=ntohl(inet_addr(ipmax));
     tmprec.hits=0;
     if ( (ret=insert(ntohl(inet_addr(ipmin)),&tmprec)) != STATUS_OK  )
@@ -125,7 +142,6 @@ void ranged_insert(char *name,char *ipmin,char *ipmax)
                 break;
         }                
 }
-
 
 void loadlist_pg1(char* filename)
 {
@@ -236,10 +252,10 @@ void loadlist_dat(char *filename)
     
     while ( fgets(readbuf,200,fp) != NULL ) {
         if ( readbuf[0] == '#') continue;		// comment line, skip
-        sscanf(readbuf,"%hd.%hd.%hd.%hd - %hd.%hd.%hd.%hd", &ip1_0, &ip1_1, &ip1_2, &ip1_3,
+        sscanf(readbuf,"%hd.%hd.%hd.%hd - %hd.%hd.%hd.%hd ,", &ip1_0, &ip1_1, &ip1_2, &ip1_3,
                                                             &ip2_0, &ip2_1, &ip2_2, &ip2_3);
         name=readbuf+42;
-        name[strlen(name)-1]='\0';		// strip ending \n
+        name[strlen(name)-2]='\0';		// strip ending \r\n
         sprintf(start_ip,"%d.%d.%d.%d",ip1_0, ip1_1, ip1_2, ip1_3);
         sprintf(end_ip,"%d.%d.%d.%d",ip2_0, ip2_1, ip2_2, ip2_3);
         ranged_insert(name, start_ip, end_ip);
@@ -262,9 +278,25 @@ void my_sahandler(int sig)
             ll_log();
             break;
         case SIGHUP:
-            fprintf(logfile,"Got SIGHUP! Dumping stats and exiting.\n");
+            fprintf(logfile,"\nGot SIGHUP! Dumping and resetting stats, reloading blocklist\n\n");
             ll_log();
-            exit(0);
+            ll_clear();				// clear stats list
+			destroy_tree();			// clear loaded ranges
+			switch (blocklist_info.type) {
+				case LIST_DAT:
+					loadlist_dat(blocklist_info.filename);
+					break;
+				case LIST_PG1:
+					loadlist_pg1(blocklist_info.filename);
+					break;
+				case LIST_PG2:
+					loadlist_pg2(blocklist_info.filename);
+					break;
+				default:
+					fprintf(stderr,"Unknown blocklist type while reloading list, contact the developer!\n");
+					break;
+			}
+			break;
          case SIGTERM:
             fprintf(logfile,"Got SIGTERM! Dumping stats and exiting.\n");
             ll_log();
@@ -300,14 +332,158 @@ void init_sa()
     }
 }
 
+#ifdef NFQUEUE
+static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
+						struct nfq_data *nfa, void *data)
+{
+	int id=0, status=0;
+	struct nfqnl_msg_packet_hdr *ph;
+	char *payload;
+	recType tmprec;
+	
+	ph = nfq_get_msg_packet_hdr(nfa);
+	if (ph) {
+		id = ntohl(ph->packet_id);
+		nfq_get_payload(nfa, &payload);
+
+		switch (ph->hook) {
+			case NF_IP_LOCAL_IN:
+				if ( find(ntohl(SRC_ADDR(payload)),&tmprec) == STATUS_OK ) {
+					status=nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+					fprintf(logfile,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR(payload)));
+				} else status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				break;
+			case NF_IP_LOCAL_OUT:
+				if ( find(ntohl(DST_ADDR(payload)),&tmprec) == STATUS_OK ) {
+					status=nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+					fprintf(logfile,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR(payload)));
+				} else status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				break;
+			default:
+				fprintf(stderr,"Not NF_LOCAL_IN/OUT packet!\n");
+				break;
+		}
+	}
+	else {
+		fprintf(logfile,"NFQUEUE: can't get msg packet header.\n");
+		return(1);		// from nfqueue source: 0 = ok, >0 = soft error, <0 hard error
+	}
+	fflush(logfile);
+	return(0);
+}
+#endif
+
+short int netlink_loop(void)
+{
+#ifdef LIBIPQ		//use old libipq interface, deprecated
+
+	struct ipq_handle *h;
+	ipq_packet_msg_t *packet;
+	int status=0;
+	unsigned char buf[BUFSIZE];
+	recType tmprec;        
+	
+	h = ipq_create_handle(0, PF_INET);
+	if (!h) die(h);
+
+	status = ipq_set_mode(h, IPQ_COPY_PACKET, PAYLOADSIZE);
+    if (status < 0) die(h);
+		
+	do {
+		status = ipq_read(h, buf, BUFSIZE, 0);
+		if (status < 0) die(h);
+
+		switch (ipq_message_type(buf)) {
+			case NLMSG_ERROR:
+				fprintf(stderr, "Received error message %d\n", ipq_get_msgerr(buf));
+				break;
+			case IPQM_PACKET:
+				packet=ipq_get_packet(buf);				
+				switch ( packet->hook ) {
+					case NF_IP_LOCAL_IN:
+						if ( find(ntohl(SRC_ADDR(packet->payload)),&tmprec) == STATUS_OK ) {
+							status=ipq_set_verdict(h,packet->packet_id,NF_DROP,0,NULL);
+							fprintf(logfile,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR(packet->payload)));
+							fflush(logfile);
+						} else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
+						break;
+					case NF_IP_LOCAL_OUT:
+						if ( find(ntohl(DST_ADDR(packet->payload)),&tmprec) == STATUS_OK ) {
+							status=ipq_set_verdict(h,packet->packet_id,NF_DROP,0,NULL);
+							fprintf(logfile,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR(packet->payload)));
+							fflush(logfile);
+						} else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
+						break;
+					default:
+						fprintf(stderr,"Not NF_LOCAL_IN/OUT packet!\n");
+						break;
+				}
+				if (status < 0) die(h);
+				break;
+			default:
+				fprintf(stderr, "Unknown message type!\n");
+				break;
+        }
+	} while (1);
+
+	ipq_destroy_handle(h);
+	return 0;
+#endif
+
+#ifdef NFQUEUE		// use new NFQUEUE interface ( from kernel 2.6.14 )
+
+	struct nfq_handle *h;
+	struct nfq_q_handle *qh;
+	struct nfnl_handle *nh;
+	int fd,rv;
+	char buf[BUFSIZE];
+
+	h = nfq_open();
+	if (!h) {
+		fprintf(stderr, "Error during nfq_open()\n");
+		exit(-1);
+	}
+
+	if (nfq_unbind_pf(h, AF_INET) < 0) {
+		fprintf(stderr, "error during nfq_unbind_pf()\n");
+		exit(-1);
+	}
+
+	if (nfq_bind_pf(h, AF_INET) < 0) {
+		fprintf(stderr, "Error during nfq_bind_pf()\n");
+		exit(-1);
+	}
+
+	fprintf(logfile,"NFQUEUE: binding to queue '0'\n");
+	qh = nfq_create_queue(h,  0, &nfqueue_cb, NULL);
+	if (!qh) {
+		fprintf(stderr, "error during nfq_create_queue()\n");
+		exit(-1);
+	}
+
+	if (nfq_set_mode(qh, NFQNL_COPY_PACKET, PAYLOADSIZE) < 0) {
+		fprintf(stderr, "can't set packet_copy mode\n");
+		exit(-1);
+	}
+
+	nh = nfq_nfnlh(h);
+	fd = nfnl_fd(nh);
+
+	while ((rv = recv(fd, buf, sizeof(buf), 0)) && rv >= 0) {
+		nfq_handle_packet(h, buf, rv);
+	}
+
+	printf("NFQUEUE: unbinding from queue 0\n");
+	nfq_destroy_queue(qh);
+	nfq_close(h);
+	exit(0);
+#endif
+
+}
+
 int main(int argc, char **argv)
 {
-	int status=0;
-        unsigned char buf[BUFSIZE];
-        recType tmprec;        
-        struct ipq_handle *h;
-        ipq_packet_msg_t *packet;
-
+	
 	if (argc < 3) {
 	        fprintf(stderr, "\nMoBlock %s",MB_VERSION);
 		fprintf(stderr, "\nSyntax: MoBlock [-dn] <blocklist> <logfile>\n\n");
@@ -316,70 +492,33 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (argc == 3 )
-	    logfile = fopen(argv[2], "a");
-        else logfile = fopen(argv[3], "a");
+	if (argc == 3 ) logfile = fopen(argv[2], "a");
+    else logfile = fopen(argv[3], "a");
         
-        if (logfile == NULL) {
+    if (logfile == NULL) {
 	    fprintf(stderr, "Unable to open logfile %s\n", argv[2]);
 	    exit(-1);
-        }
+	}
    
 	init_sa();	
 	
-	if ( !strcmp(argv[1],"-d") )	// ipfilter.dat file format
+	if ( !strcmp(argv[1],"-d") ) {	// ipfilter.dat file format
 	    loadlist_dat(argv[2]);
-        else if ( !strcmp(argv[1],"-n")	)	// peerguardian 2.x file format
-                  loadlist_pg2(argv[2]);
-             else loadlist_pg1(argv[1]);	// no -dn options
+		blocklist_info.type=LIST_DAT;
+		blocklist_info.filename=argv[2];
+	}
+	else if ( !strcmp(argv[1],"-n")	) {		// peerguardian 2.x file format
+			loadlist_pg2(argv[2]);
+			blocklist_info.type=LIST_PG2;
+			blocklist_info.filename=argv[2];
+		 }
+		 else { 							// no -dn options
+			loadlist_pg1(argv[1]);
+			blocklist_info.type=LIST_PG1;
+			blocklist_info.filename=argv[1];
+		 }
 	
-        h = ipq_create_handle(0, PF_INET);
-        if (!h)
-	        die(h);
-
-        status = ipq_set_mode(h, IPQ_COPY_PACKET, PAYLOADSIZE);
-        if (status < 0)
-                die(h);
-		
-        do {
-                status = ipq_read(h, buf, BUFSIZE, 0);
-                if (status < 0)
-                      die(h);
-
-                switch (ipq_message_type(buf)) {
-	                case NLMSG_ERROR:
-        	                fprintf(stderr, "Received error message %d\n", ipq_get_msgerr(buf));
-                                break;
- 			case IPQM_PACKET:
-                                packet=ipq_get_packet(buf);				
-				switch ( packet->hook ) {
-                                    case NF_IP_LOCAL_IN:
-                                           if ( find(ntohl(SRC_ADDR),&tmprec) == STATUS_OK ) {
-                                               status=ipq_set_verdict(h,packet->packet_id,NF_DROP,0,NULL);
-                                               fprintf(logfile,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR));
-                                               fflush(logfile);
-                                           } else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
-                                           break;
-                                    case NF_IP_LOCAL_OUT:
-                                           if ( find(ntohl(DST_ADDR),&tmprec) == STATUS_OK ) {
-                                               status=ipq_set_verdict(h,packet->packet_id,NF_DROP,0,NULL);
-                                               fprintf(logfile,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR));
-                                               fflush(logfile);
-                                           } else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
-                                           break;
-                                    default:
-                                          fprintf(stderr,"Not NF_LOCAL_IN/OUT packet!\n");
-                                          break;
-                                }
-                                if (status < 0)
-                                    die(h);
-                                break;
-                        default:
-                               fprintf(stderr, "Unknown message type!\n");
-                               break;
-                }
-          } while (1);
-
-          ipq_destroy_handle(h);
-          return 0;
+    netlink_loop();
+	
+	exit(0);
 }

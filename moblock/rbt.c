@@ -19,7 +19,7 @@
 #include <stdarg.h>
 #include <time.h>
 
-#define RBT_VERSION 0.4
+#define RBT_VERSION 0.6
 
 /* implementation dependend declarations */
 typedef enum {
@@ -33,7 +33,7 @@ typedef unsigned long keyType;            /* type of key */
 
 /* user data stored in tree */
 typedef struct {
-    char blockname[60];                  /* optional related data */
+    char blockname[80];                  /* optional related data */
     unsigned long ipmax;
     int hits;
 } recType;
@@ -56,6 +56,13 @@ typedef struct nodeTag {
     recType rec;                /* user data */
 } nodeType;
 
+#define NIL &sentinel           /* all leafs are sentinels */
+static nodeType sentinel = { NIL, NIL, 0, BLACK, 0};
+
+/* last node found, optimizes find/delete operations */
+static nodeType *lastFind;
+
+static nodeType *root = NIL;    /* root of Red-Black tree */
 
 // stats linked list
 typedef struct ll_elem {
@@ -65,6 +72,23 @@ typedef struct ll_elem {
 
 static ll_node *ll_top=NULL;
 static ll_node *ll_last=NULL;
+
+void ll_clear(void)
+{
+	ll_node *current,*next;
+
+	current=ll_top;
+	if (current == NULL) fprintf(stderr,"Warning! Empty blocklist, nothing to clear!\n");
+	else {
+		do {
+			next=current->next;
+			free(current);
+			current=next;
+		} while (current);
+		ll_top=NULL;
+		ll_last=NULL;
+	}
+}
 
 short int ll_insert(nodeType *nt)
 {
@@ -136,13 +160,20 @@ void ll_log()
     }
 }
 
-#define NIL &sentinel           /* all leafs are sentinels */
-static nodeType sentinel = { NIL, NIL, 0, BLACK, 0};
+void do_destroy_tree(nodeType *leaf)
+{
+	if (leaf!=NIL && leaf) {
+		do_destroy_tree(leaf->left);
+		do_destroy_tree(leaf->right);
+		free(leaf);
+	}
+}
 
-/* last node found, optimizes find/delete operations */
-static nodeType *lastFind;
-
-static nodeType *root = NIL;    /* root of Red-Black tree */
+void destroy_tree()
+{
+	do_destroy_tree(root);
+	root=NIL;
+}
 
 static void rotateLeft(nodeType *x) {
 

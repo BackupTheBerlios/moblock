@@ -1,5 +1,5 @@
 
-MoBlock README v0.4
+MoBlock README v0.6
 http://moblock.berlios.de
 
 .Introduction.
@@ -12,12 +12,24 @@ http://moblock.berlios.de
    usage. I test it on an old Celeron 400 Mhz and its cpu usage has only spikes
    at 5% under normal usage (edonkey, bittorrent etc...).
 
+** UPDATE: from version 0.6 MoBlock supports the new kernel interface NFQUEUE
+   added in kernel 2.6.14 and the default is to compile and use it instead
+   of the deprecated ip_queue interface. If you want to use the old interface
+   you must edit the Makefile, read below to know what to modify.
+
 
 .Requirements.
 
 1) iptables and kernel support for connection and state tracking (
-   ip_conntrack,ipt_state) and ip_queue kernel modules/built-in.
-   This are the kernel modules i have with MoBlock running
+   ip_conntrack,ipt_state) and ip_queue or ipt_NFQUEUE kernel modules/built-in.
+
+   At least kernel 2.6.14 is required to use the NFQUEUE interface (the
+   default interface from MoBlock version 0.6) and userspace library:
+
+   libnfnetlink 0.0.14
+   libnetfilter_queue 0.0.11
+
+   These are the kernel modules i have with MoBlock running
    on 2.6.9-ac6:
 	
 	iptable_filter          2016  1
@@ -25,6 +37,16 @@ http://moblock.berlios.de
 	ip_conntrack           37716  1 ipt_state
 	ip_tables              14496  2 iptable_filter,ipt_state
 	ip_queue                7608  0
+
+   ...and these with kernel 2.6.15 using new NFQUEUE interface:
+
+	nfnetlink_queue         9280  1
+	nfnetlink               4824  2 nfnetlink_queue
+	ipt_NFQUEUE             1408  2
+	ipt_state               1472  0
+	ip_conntrack           40044  1 ipt_state
+	iptable_filter          2176  1
+	ip_tables              17600  3 ipt_NFQUEUE,ipt_state,iptable_filter
 
 2) A valid guarding.p2p/ipfilter.dat/p2p.p2b host file in /etc ( /etc/guarding.p2p ).
    MoBlock tries to skip malformed or duplicate ranges but
@@ -39,23 +61,22 @@ http://moblock.berlios.de
    MoBlock filter only packets that are QUEUEd with iptables. So it's up
    to you to choose what traffic you want to be filtered.
    For example if you want MoBlock to filter all the new TCP connections
-   that are initiated from your box:
+   that are initiated from your box using NFQUEUE kernel interface:
 
-	iptables -A OUTPUT -p tcp -m state --state NEW -j QUEUE
+	iptables -A OUTPUT -p tcp -m state --state NEW -j NFQUEUE
 
    A simple start script (MoBlock.sh) is provided that makes MoBlock
    filter all new incoming and outgoing connections, both for tcp and udp.
-   
-   !!! While MoBlock is active it is needed an explicit iptables rule to
-   accept localhost-to-locahost connections:
-   
-   iptables -I INPUT -p tcp -s 127.0.0.1 -d 127.0.0.1 -j ACCEPT
-   iptables -I INPUT -p udp -s 127.0.0.1 -d 127.0.0.1 -j ACCEPT
-   
-   They will be dropped with a connection reset if you don't ACCEPT them.
-   I'm still investigating about this issue. 
-   Provided start script has already these rules.
 
+   Warning: many block lists include the loopback address so you can have
+   strange troubles accessing localhost services. I added in the start
+   script explicit rules to accept localhost-to-locahost connections.
+
+** VERY IMPORTANT WARNING!! **
+
+   When a packet hits a NFQUEUE/QUEUE rule it will be accepted or dropped by
+   MoBlock (well it is what you want right? :P ) so it will NOT be checked
+   by other rules that may follow in the chain!
 
 .Installation & Usage.
 
@@ -66,10 +87,9 @@ http://moblock.berlios.de
    make
    cp MoBlock ../
 
-   Binary version is compiled on Slackware 10.1 with gcc 3.4.3
-   There is also a statically compiled version, "MoBlock.static", if you
-   want to use it just rename it to "MoBlock" (deleting/renaming the
-   original MoBlock).
+   The static version was compiled on Slackware 10.2 with gcc 3.4.5, if you
+   don't want to install the libnetfilter libraries try it,just rename it
+   to "MoBlock".
 
    To start it just launch MoBlock.sh as root, for example:
 
@@ -93,8 +113,6 @@ http://moblock.berlios.de
 
    To stop it:
 
-   kill -HUP <MoBlockPid> 
-   or
    kill -TERM <MoBlockPid>
 
    While shutting down it will dump some stats to /var/log/MoBlock.stats
@@ -103,6 +121,10 @@ http://moblock.berlios.de
    kill -USR1 <MoBlockPid>	# write stats to logfile
    kill -USR2 <MoBlockPid>      # write stats to /var/log/MoBlock.stats
 
+** NEW: to reload the blocklist while MoBlock is running send to it the
+   HUP signal:
+
+   kill -HUP <MoBlockPid>	# reloads blocklist and resets stats
 
 .Credits.
 
@@ -114,4 +136,4 @@ http://moblock.berlios.de
 - Andrew de Quincey (adq at lidskialf dot net) for regular expressions
   and command line args patch
 
-Last Updated: 06/03/2005
+Last Updated: 01/Feb/2006
