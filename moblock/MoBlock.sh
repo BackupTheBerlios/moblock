@@ -19,7 +19,7 @@ iptables -I INPUT -p all -i lo -j ACCEPT
 iptables -I OUTPUT -p all -o lo -j ACCEPT
 
 # Here you can change block list and log files
-./MoBlock /etc/guarding.p2p ./MoBlock.log
+./MoBlock -p /etc/guarding.p2p ./MoBlock.log
 
 # On exit delete the rules we added
 

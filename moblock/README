@@ -1,5 +1,5 @@
 
-MoBlock README v0.6
+MoBlock README v0.7
 http://moblock.berlios.de
 
 .Introduction.
@@ -57,6 +57,10 @@ http://moblock.berlios.de
    a problem anymore for these lists.
    In my tests i used lists from http://methlabs.org
 
+   From version 0.7 loaded ranges are now automatically merged when
+   overlapping or already included ranges are found (guarding.p2p files
+   usually have many of these).
+
 3) Minimum iptables knowledge (or trust my start script).
    MoBlock filter only packets that are QUEUEd with iptables. So it's up
    to you to choose what traffic you want to be filtered.
@@ -64,6 +68,12 @@ http://moblock.berlios.de
    that are initiated from your box using NFQUEUE kernel interface:
 
 	iptables -A OUTPUT -p tcp -m state --state NEW -j NFQUEUE
+
+   NFQUEUE supports multiple queues (using --queue-num option), you MUST
+   specify it when launching MoBlock if you don't use the default queue 0
+   using the -q command line option ( -q 0-65535 ).
+   Running two or more MoBlock instances to handle different queues was
+   not tested, do it at your own risk!
 
    A simple start script (MoBlock.sh) is provided that makes MoBlock
    filter all new incoming and outgoing connections, both for tcp and udp.
@@ -81,7 +91,11 @@ http://moblock.berlios.de
 .Installation & Usage.
 
    Just untar somwhere.
-   To build MoBlock from sources just do "make" in untar directory.
+   To build MoBlock from sources just do:
+   
+   cd src
+   make
+   cp MoBlock ../
 
    The static version was compiled on Slackware 10.2 with gcc 3.4.5, if you
    don't want to install the libnetfilter libraries try it,just rename it
@@ -97,15 +111,19 @@ http://moblock.berlios.de
    For example if you want to use new p2p.pdb files change this line into
    the start script:
 
-   ./MoBlock /etc/guarding.p2p MoBlock.log
+	./MoBlock -p /etc/guarding.p2p MoBlock.log
 
    into this:
 
-   ./MoBlock -n /etc/p2p.p2b MoBlock.log
+	./MoBlock -n /etc/p2p.p2b MoBlock.log
 
    or if you want to use ipfilter.dat files:
 
-   ./MoBlock -d /etc/ipfilter.dat MoBlock.log
+	./MoBlock -d /etc/ipfilter.dat MoBlock.log
+
+   To specify a NFQUEUE queue number:
+
+	./MoBlock -p /etc/guarding.p2p -q 5 MoBlock.log
 
    To stop it:
 
@@ -132,4 +150,4 @@ http://moblock.berlios.de
 - Andrew de Quincey (adq at lidskialf dot net) for regular expressions
   and command line args patch
 
-Last Updated: 01/Feb/2006
+Last Updated: 15/Feb/2006

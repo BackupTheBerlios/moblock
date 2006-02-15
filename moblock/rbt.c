@@ -19,21 +19,24 @@
 #include <stdarg.h>
 #include <time.h>
 
-#define RBT_VERSION 0.6
+#define RBT_VERSION 0.7
+#define BNAME_LEN	80
 
 /* implementation dependend declarations */
 typedef enum {
     STATUS_OK,
     STATUS_MEM_EXHAUSTED,
     STATUS_DUPLICATE_KEY,
-    STATUS_KEY_NOT_FOUND
+    STATUS_KEY_NOT_FOUND,
+	STATUS_MERGED,
+	STATUS_SKIPPED
 } statusEnum;
 
 typedef unsigned long keyType;            /* type of key */
 
 /* user data stored in tree */
 typedef struct {
-    char blockname[80];                  /* optional related data */
+    char blockname[BNAME_LEN];                  /* optional related data */
     unsigned long ipmax;
     int hits;
 } recType;
@@ -72,6 +75,8 @@ typedef struct ll_elem {
 
 static ll_node *ll_top=NULL;
 static ll_node *ll_last=NULL;
+
+extern FILE *logfile;
 
 void ll_clear(void)
 {
@@ -291,50 +296,6 @@ static void insertFixup(nodeType *x) {
     root->color = BLACK;
 }
 
-statusEnum insert(keyType key, recType *rec) {
-    nodeType *current, *parent, *x;
-
-   /***********************************************
-    *  allocate node for data and insert in tree  *
-    ***********************************************/
-
-    /* find future parent */
-    current = root;
-    parent = 0;
-    while (current != NIL) {
-        if (compEQ(key, current->key)) 
-            return STATUS_DUPLICATE_KEY;
-        parent = current;
-        current = compLT(key, current->key) ?
-            current->left : current->right;
-    }
-
-    /* setup new node */
-    if ((x = malloc(sizeof(nodeType))) == NULL)
-        return STATUS_MEM_EXHAUSTED;
-    x->parent = parent;
-    x->left = NIL;
-    x->right = NIL;
-    x->color = RED;
-    x->key = key;
-    x->rec = *rec;
-
-    /* insert node in tree */
-    if(parent) {
-        if(compLT(key, parent->key))
-            parent->left = x;
-        else
-            parent->right = x;
-    } else {
-        root = x;
-    }
-
-    insertFixup(x);
-    lastFind = NULL;
-
-    return STATUS_OK;
-}
-
 static void deleteFixup(nodeType *x) {
 
    /*************************************
@@ -453,6 +414,89 @@ statusEnum delete(keyType key) {
         deleteFixup (x);
 
     free (y);
+    lastFind = NULL;
+
+    return STATUS_OK;
+}
+
+statusEnum insert(keyType key, recType *rec) {
+    nodeType *current, *parent, *x;
+	keyType tmpkey;
+	recType tmprec;
+	int ret;
+	
+   /***********************************************
+    *  allocate node for data and insert in tree  *
+    ***********************************************/
+
+    /* find future parent */
+    current = root;
+    parent = 0;
+    while (current != NIL) {
+        if (compEQ(key, current->key)) {
+			if ( rec->ipmax > current->rec.ipmax ) {
+				current->rec.ipmax=rec->ipmax;
+				strcpy(current->rec.blockname,rec->blockname);
+				fprintf(logfile, "Merged range '%s', with range '%s'\n", rec->blockname, current->rec.blockname);
+				return STATUS_MERGED;
+			}
+			if ( rec->ipmax == current->rec.ipmax )
+				return STATUS_DUPLICATE_KEY;
+			if ( rec->ipmax < current->rec.ipmax )
+				return STATUS_SKIPPED;
+		}
+		//check if lower ip (key) is already in a range
+		if (compEQ2(key, current->key,current->rec.ipmax)) {
+			if (rec->ipmax > current->rec.ipmax) {
+				current->rec.ipmax=rec->ipmax;
+				fprintf(logfile, "Merged range '%s', with range '%s'\n", rec->blockname, current->rec.blockname);
+				return STATUS_MERGED;
+			}
+			else {
+				fprintf(logfile, "Skipping useless range: %s\n", rec->blockname);
+				return STATUS_SKIPPED;
+			}
+		}
+		//check if higher ip (ipmax) is already in a range
+		if (compEQ2(rec->ipmax,current->key,current->rec.ipmax)) {
+			fprintf(logfile,"higher ip in range\n");
+			tmpkey=key;
+			strcpy(tmprec.blockname,current->rec.blockname);
+			tmprec.ipmax=current->rec.ipmax;
+			ret=delete(current->key);
+			if ( ret != STATUS_OK )
+				return(ret);
+			ret=insert(tmpkey,&tmprec);
+			if ( ret == STATUS_OK )
+				return(STATUS_MERGED);
+			else return(ret);
+		}
+        parent = current;
+        current = compLT(key, current->key) ?
+            current->left : current->right;
+    }
+
+    /* setup new node */
+    if ((x = malloc(sizeof(nodeType))) == NULL)
+        return STATUS_MEM_EXHAUSTED;
+    x->parent = parent;
+    x->left = NIL;
+    x->right = NIL;
+    x->color = RED;
+    x->key = key;
+    x->rec = *rec;
+
+    /* insert node in tree */
+    if(parent) {
+        if(compLT(key, parent->key))
+            parent->left = x;
+        else
+            parent->right = x;
+    } else {
+        root = x;
+    }
+
+    insertFixup(x);
     lastFind = NULL;
 
     return STATUS_OK;

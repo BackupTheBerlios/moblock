@@ -7,8 +7,8 @@
 #QUEUE_LIB=LIBIPQ
 QUEUE_LIB=NFQUEUE
 
-CFLAGS=-Wall -O2 -march=i586 -mcpu=i686 -fomit-frame-pointer -ffast-math \
-	-D_GNU_SOURCE -D$(QUEUE_LIB) -L/usr/include/libipq
+CFLAGS=-Wall -O2 -march=i586 -mtune=i686 -fomit-frame-pointer -ffast-math \
+	-D_GNU_SOURCE -D$(QUEUE_LIB)
 CC=gcc
 
 all: MoBlock

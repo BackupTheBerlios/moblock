@@ -24,6 +24,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <netinet/ip.h>
@@ -45,10 +46,11 @@
 	#include <libnetfilter_queue/libnetfilter_queue.h>
 #endif
 
-#define MB_VERSION	"0.6"
+#define MB_VERSION	"0.7"
 
 #define BUFSIZE		2048
 #define PAYLOADSIZE	21
+#define BNAME_LEN	80
 
 #define IS_UDP (packet->payload[9] == 17)
 #define IS_TCP (packet->payload[9] == 6)
@@ -62,13 +64,15 @@ typedef enum {
     STATUS_OK,
     STATUS_MEM_EXHAUSTED,
     STATUS_DUPLICATE_KEY,
-    STATUS_KEY_NOT_FOUND 
+    STATUS_KEY_NOT_FOUND,
+	STATUS_MERGED,
+	STATUS_SKIPPED
 } statusEnum;
                 
 typedef unsigned long keyType;            /* type of key */
                 
 typedef struct {
-    char blockname[80];                  /* data */
+    char blockname[BNAME_LEN];                  /* data */
     unsigned long ipmax;
     int hits;
 } recType;   
@@ -82,11 +86,13 @@ extern void destroy_tree();
 
 // end of headers
 
-static FILE* logfile;
+FILE *logfile;
 struct {			//holds list type and filename
 	enum { LIST_DAT = 0, LIST_PG1, LIST_PG2} type;
-	char *filename;
+	char filename[100];
 } blocklist_info;
+
+int merged_ranges=0, skipped_ranges=0;
 
 #ifdef LIBIPQ
 static void die(struct ipq_handle *h)
@@ -120,22 +126,32 @@ void print_addr( FILE *f, in_addr_t ip, int port )
 	fflush(stdout);
 }
 
-void ranged_insert(char *name,char *ipmin,char *ipmax)
+inline void ranged_insert(char *name,char *ipmin,char *ipmax)
 {
     recType tmprec;
     int ret;
 
-    strcpy(tmprec.blockname,name);		// 80 = recType.blockname lenght
+	if ( strlen(name) > (BNAME_LEN-1) ) {
+		strncpy(tmprec.blockname, name, BNAME_LEN);
+		tmprec.blockname[BNAME_LEN-1]='\0';	
+	}
+	else strcpy(tmprec.blockname,name);
     tmprec.ipmax=ntohl(inet_addr(ipmax));
     tmprec.hits=0;
     if ( (ret=insert(ntohl(inet_addr(ipmin)),&tmprec)) != STATUS_OK  )
         switch(ret) {
             case STATUS_MEM_EXHAUSTED:
-                fprintf(logfile,"Error inserting range, MEM_EXHAUSTED.\n");
+                fprintf(stderr,"Error inserting range, MEM_EXHAUSTED.\n");
                 break;
             case STATUS_DUPLICATE_KEY:
                 fprintf(logfile,"Duplicated range ( %s )\n",name);
                 break;
+			case STATUS_MERGED:
+				merged_ranges++;
+				break;
+			case STATUS_SKIPPED:
+				skipped_ranges++;
+				break;
             default:
                 fprintf(logfile,"Unexpected return value from ranged_insert()!\n");
                 fprintf(logfile,"Return value was: %d\n",ret);
@@ -190,7 +206,7 @@ void loadlist_pg1(char* filename)
 		free(line);
 	fclose(fp);
 	fprintf(logfile,"Ranges loaded: %d\n",ntot);
-	fflush(logfile);
+	printf("* Ranges loaded: %d\n",ntot);
 }
 
 void loadlist_pg2(char *filename)		// experimental, no check for list sanity
@@ -206,7 +222,7 @@ void loadlist_pg2(char *filename)		// experimental, no check for list sanity
         fprintf(logfile,"Error opening %s, aborting...\n", filename);
         exit(-1);
     }
-                                        
+
     fgetc(fp);					// skip first 4 bytes, don't know what they are
     fgetc(fp);
     fgetc(fp);
@@ -234,7 +250,7 @@ void loadlist_pg2(char *filename)		// experimental, no check for list sanity
     }
     fclose(fp);
     fprintf(logfile,"Ranges loaded: %d\n",ntot);
-    fflush(logfile);
+	printf("* Ranges loaded: %d\n",ntot);
 }
 
 void loadlist_dat(char *filename)
@@ -263,7 +279,7 @@ void loadlist_dat(char *filename)
     }
     fclose(fp);
     fprintf(logfile,"Ranges loaded: %d\n",ntot);
-    fflush(logfile);                                        
+	printf("* Ranges loaded: %d\n",ntot);
 }
 
 void my_sahandler(int sig)
@@ -373,7 +389,7 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 }
 #endif
 
-short int netlink_loop(void)
+short int netlink_loop(unsigned short int queuenum)
 {
 #ifdef LIBIPQ		//use old libipq interface, deprecated
 
@@ -454,8 +470,8 @@ short int netlink_loop(void)
 		exit(-1);
 	}
 
-	fprintf(logfile,"NFQUEUE: binding to queue '0'\n");
-	qh = nfq_create_queue(h,  0, &nfqueue_cb, NULL);
+	fprintf(logfile,"NFQUEUE: binding to queue '%hd'\n", queuenum);
+	qh = nfq_create_queue(h,  queuenum, &nfqueue_cb, NULL);
 	if (!qh) {
 		fprintf(stderr, "error during nfq_create_queue()\n");
 		exit(-1);
@@ -476,49 +492,80 @@ short int netlink_loop(void)
 	printf("NFQUEUE: unbinding from queue 0\n");
 	nfq_destroy_queue(qh);
 	nfq_close(h);
-	exit(0);
+	return(0);
 #endif
 
 }
 
+void print_options(void)
+{
+	printf("\nMoBlock %s by Morpheus",MB_VERSION);
+	printf("\nSyntax: MoBlock [-dnp] <blocklist> [-q 0-65535] <logfile>\n\n");
+	printf("\t-d\tblocklist is an ipfilter.dat file\n");
+	printf("\t-n\tblocklist is a peerguardian 2.x file (.p2b)\n");
+	printf("\t-p\tblocklist is a peerguardian file (.p2p)\n");
+	printf("\t-q 0-65535 NFQUEUE number (as specified in --queue-num with iptables)\n");
+}
+
+
 int main(int argc, char **argv)
 {
+	int ret=0;
+	unsigned short int queuenum=0;
 	
 	if (argc < 3) {
-	        fprintf(stderr, "\nMoBlock %s",MB_VERSION);
-		fprintf(stderr, "\nSyntax: MoBlock [-dn] <blocklist> <logfile>\n\n");
-		fprintf(stderr, "\t-d\tblocklist is an ipfilter.dat file\n");
-		fprintf(stderr, "\t-n\tblocklist is a peerguardian 2.x file (.p2b)\n\n");
-		exit(1);
+		print_options();
+		exit(-1);
 	}
-
-	if (argc == 3 ) logfile = fopen(argv[2], "a");
-    else logfile = fopen(argv[3], "a");
-        
-    if (logfile == NULL) {
-	    fprintf(stderr, "Unable to open logfile %s\n", argv[2]);
+  
+	init_sa();
+	logfile=fopen(argv[argc-1],"a");
+	if (logfile == NULL) {
+	    fprintf(stderr, "Unable to open logfile %s\n", argv[argc-1]);
 	    exit(-1);
 	}
-   
-	init_sa();	
+	printf("* Logging to %s\n",argv[argc-1]);
 	
-	if ( !strcmp(argv[1],"-d") ) {	// ipfilter.dat file format
-	    loadlist_dat(argv[2]);
-		blocklist_info.type=LIST_DAT;
-		blocklist_info.filename=argv[2];
+	while (1) {		//scan command line options
+		ret=getopt(argc, argv, "d:n:p:q:");
+		if ( ret == -1 ) break;
+		
+		switch (ret) {
+			case 'd':			// ipfilter.dat file format
+				loadlist_dat(optarg);
+				blocklist_info.type=LIST_DAT;
+				strcpy(blocklist_info.filename,optarg);
+				printf("* Using .dat file format\n");
+				break;
+			case 'n':			// peerguardian 2.x file format .p2b
+				loadlist_pg2(optarg);
+				blocklist_info.type=LIST_PG2;
+				strcpy(blocklist_info.filename,optarg);
+				printf("* Using .p2b file format\n");
+				break;
+			case 'p':			// peerguardian file format .p2p
+				loadlist_pg1(optarg);
+				blocklist_info.type=LIST_PG1;
+				strcpy(blocklist_info.filename,optarg);
+				printf("* Using .p2p file format\n");
+				break;
+			case 'q':
+				queuenum=(unsigned short int)atoi(optarg);
+				break;
+			case '?':			// unknown option
+				print_options();
+				exit(-1);
+				break;
+		}
 	}
-	else if ( !strcmp(argv[1],"-n")	) {		// peerguardian 2.x file format
-			loadlist_pg2(argv[2]);
-			blocklist_info.type=LIST_PG2;
-			blocklist_info.filename=argv[2];
-		 }
-		 else { 							// no -dn options
-			loadlist_pg1(argv[1]);
-			blocklist_info.type=LIST_PG1;
-			blocklist_info.filename=argv[1];
-		 }
 	
-    netlink_loop();
+	printf("* Merged ranges: %d\n", merged_ranges);
+	fprintf(logfile, "Merged ranges: %d\n", merged_ranges);
+	printf("* Skipped useless ranges: %d\n", skipped_ranges);
+	fprintf(logfile,"Skipped useless ranges: %d\n", skipped_ranges);
+	fflush(NULL);
+	
+    netlink_loop(queuenum);
 	
 	exit(0);
 }

@@ -4,6 +4,18 @@ http://moblock.berlios.de
 
 ---
 
+0.7: - loaded ranges are now automatically merged when overlapping
+       or already included ranges are found (guarding.p2p files
+       usually have many of these)
+     - added command line option -q to specify queue number (only
+       when using NFQUEUE interface), must match iptables
+       --queue-num option. Defaults to 0 if not specified
+     - on startup prints used options and ranges stats
+     - better handling of command line options
+     - fix string handling bug
+
+---
+
 0.6: - added support for new kernel interface NFQUEUE
        (from kernel 2.6.14)
      - blocklist can be reloaded on runtime sending
