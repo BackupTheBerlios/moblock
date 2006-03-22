@@ -46,7 +46,7 @@
 	#include <libnetfilter_queue/libnetfilter_queue.h>
 #endif
 
-#define MB_VERSION	"0.7"
+#define MB_VERSION	"0.8"
 
 #define BUFSIZE		2048
 #define PAYLOADSIZE	21
@@ -78,6 +78,7 @@ typedef struct {
 } recType;   
 
 extern statusEnum find(keyType key, recType *rec);
+extern statusEnum find2(keyType key1, keyType key2, recType *rec);
 extern statusEnum insert(keyType key, recType *rec);
 extern void ll_show(FILE *logf);
 extern void ll_log();
@@ -87,6 +88,9 @@ extern void destroy_tree();
 // end of headers
 
 FILE *logfile;
+char *logfile_name=NULL;
+const char* pidfile_name="/var/run/moblock.pid";
+
 struct {			//holds list type and filename
 	enum { LIST_DAT = 0, LIST_PG1, LIST_PG2} type;
 	char filename[100];
@@ -99,22 +103,26 @@ static void die(struct ipq_handle *h)
 {
 	ipq_perror("MoBlock");
         ipq_destroy_handle(h);
-        exit(-1);
+		exit(-1);
 }
 #endif
 
 char *ip2str(in_addr_t ip)
 {
-	static int bn = 0;
-	static char buff[32][4];
-	struct in_addr a;
-	char *rtn;
-
-	a.s_addr = ip;
-	if (bn > 3) bn = 0;
-	strcpy(buff[bn], inet_ntoa(a));
-	rtn = buff[bn++];
-	return rtn;
+	static char buf[2][ sizeof("aaa.bbb.ccc.ddd") ];
+	static short int index=0;
+	
+	sprintf(buf[index],"%d.%d.%d.%d",
+			(ip) & 0xff,
+			(ip >> 8) & 0xff,
+			(ip >> 16) & 0xff,
+			(ip >> 24) & 0xff);
+	
+	if (index) {
+		index=0;
+		return buf[1];
+	}
+	else return buf[index++];
 }
 
 void print_addr( FILE *f, in_addr_t ip, int port )
@@ -141,7 +149,7 @@ inline void ranged_insert(char *name,char *ipmin,char *ipmax)
     if ( (ret=insert(ntohl(inet_addr(ipmin)),&tmprec)) != STATUS_OK  )
         switch(ret) {
             case STATUS_MEM_EXHAUSTED:
-                fprintf(stderr,"Error inserting range, MEM_EXHAUSTED.\n");
+                fprintf(logfile,"Error inserting range, MEM_EXHAUSTED.\n");
                 break;
             case STATUS_DUPLICATE_KEY:
                 fprintf(logfile,"Duplicated range ( %s )\n",name);
@@ -282,22 +290,37 @@ void loadlist_dat(char *filename)
 	printf("* Ranges loaded: %d\n",ntot);
 }
 
+void reopen_logfile(void)
+{
+	if (logfile != NULL) {
+        	fclose(logfile);
+		logfile=NULL;
+	}
+	logfile=fopen(logfile_name,"a");
+	if (logfile == NULL) {
+		fprintf(stderr, "Unable to open logfile %s\n", logfile_name);
+		exit(-1);
+	}
+	fprintf(logfile, "Reopening logfile.\n");
+}
+
 void my_sahandler(int sig)
 {
-    switch( sig ) {
-        case SIGUSR1:
-            fprintf(logfile,"Got SIGUSR1! Dumping stats...\n");
-            ll_show(logfile);
-            break;
-        case SIGUSR2:
-            fprintf(logfile,"Got SIGUSR2! Dumping stats to /var/log/MoBlock.stats\n");
-            ll_log();
-            break;
-        case SIGHUP:
-            fprintf(logfile,"\nGot SIGHUP! Dumping and resetting stats, reloading blocklist\n\n");
-            ll_log();
-            ll_clear();				// clear stats list
-			destroy_tree();			// clear loaded ranges
+	switch( sig ) {
+        	case SIGUSR1:
+			fprintf(logfile,"Got SIGUSR1! Dumping stats...\n");
+			ll_show(logfile);
+			reopen_logfile();
+			break;
+		case SIGUSR2:
+			fprintf(logfile,"Got SIGUSR2! Dumping stats to /var/log/MoBlock.stats\n");
+			ll_log();
+			break;
+		case SIGHUP:
+			fprintf(logfile,"\nGot SIGHUP! Dumping and resetting stats, reloading blocklist\n\n");
+			ll_log();
+			ll_clear();		// clear stats list
+			destroy_tree();		// clear loaded ranges
 			switch (blocklist_info.type) {
 				case LIST_DAT:
 					loadlist_dat(blocklist_info.filename);
@@ -309,18 +332,19 @@ void my_sahandler(int sig)
 					loadlist_pg2(blocklist_info.filename);
 					break;
 				default:
-					fprintf(stderr,"Unknown blocklist type while reloading list, contact the developer!\n");
+					fprintf(logfile,"Unknown blocklist type while reloading list, contact the developer!\n");
 					break;
 			}
+			reopen_logfile();
 			break;
-         case SIGTERM:
-            fprintf(logfile,"Got SIGTERM! Dumping stats and exiting.\n");
-            ll_log();
-            exit(0);
-        default:
-            fprintf(stderr,"Received signal = %d but not handled\n",sig);
-            break;
-    }
+		case SIGTERM:
+			fprintf(logfile,"Got SIGTERM! Dumping stats and exiting.\n");
+			ll_log();
+			exit(0);
+		default:
+			fprintf(logfile,"Received signal = %d but not handled\n",sig);
+			break;
+	}
 }
 
 void init_sa()
@@ -356,7 +380,7 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	struct nfqnl_msg_packet_hdr *ph;
 	char *payload;
 	recType tmprec;
-	
+
 	ph = nfq_get_msg_packet_hdr(nfa);
 	if (ph) {
 		id = ntohl(ph->packet_id);
@@ -375,8 +399,16 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 					fprintf(logfile,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR(payload)));
 				} else status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 				break;
+			case NF_IP_FORWARD:
+				if ( find2(ntohl(SRC_ADDR(payload)), ntohl(DST_ADDR(payload)), &tmprec) == STATUS_OK ) {
+					status=nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+					fprintf(logfile,"Blocked FWD: %s,hits: %d,SRC: %s, DST: %s\n",
+								tmprec.blockname, tmprec.hits, ip2str(SRC_ADDR(payload)), ip2str(DST_ADDR(payload)));
+					fflush(logfile);
+				} else status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				break;
 			default:
-				fprintf(stderr,"Not NF_LOCAL_IN/OUT packet!\n");
+				fprintf(logfile,"Not NF_LOCAL_IN/OUT/FORWARD packet!\n");
 				break;
 		}
 	}
@@ -403,7 +435,7 @@ short int netlink_loop(unsigned short int queuenum)
 	if (!h) die(h);
 
 	status = ipq_set_mode(h, IPQ_COPY_PACKET, PAYLOADSIZE);
-    if (status < 0) die(h);
+	if (status < 0) die(h);
 		
 	do {
 		status = ipq_read(h, buf, BUFSIZE, 0);
@@ -411,7 +443,7 @@ short int netlink_loop(unsigned short int queuenum)
 
 		switch (ipq_message_type(buf)) {
 			case NLMSG_ERROR:
-				fprintf(stderr, "Received error message %d\n", ipq_get_msgerr(buf));
+				fprintf(logfile, "Received error message %d\n", ipq_get_msgerr(buf));
 				break;
 			case IPQM_PACKET:
 				packet=ipq_get_packet(buf);				
@@ -430,16 +462,24 @@ short int netlink_loop(unsigned short int queuenum)
 							fflush(logfile);
 						} else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
 						break;
+					case NF_IP_FORWARD:
+						if ( find2(ntohl(SRC_ADDR(packet->payload)), ntohl(DST_ADDR(packet->payload)), &tmprec) == STATUS_OK ) {
+							status=ipq_set_verdict(h,packet->packet_id,NF_DROP,0,NULL);
+							fprintf(logfile,"Blocked FWD: %s,hits: %d,SRC: %s, DST: %s\n",
+										tmprec.blockname, tmprec.hits, ip2str(SRC_ADDR(packet->payload)), ip2str(DST_ADDR(packet->payload)));
+							fflush(logfile);
+						} else status = ipq_set_verdict(h, packet->packet_id,NF_ACCEPT,0,NULL);
+						break;
 					default:
-						fprintf(stderr,"Not NF_LOCAL_IN/OUT packet!\n");
+						fprintf(logfile,"Not NF_LOCAL_IN/OUT/FORWARD packet!\n");
 						break;
 				}
 				if (status < 0) die(h);
 				break;
 			default:
-				fprintf(stderr, "Unknown message type!\n");
+				fprintf(logfile, "Unknown message type!\n");
 				break;
-        }
+                }
 	} while (1);
 
 	ipq_destroy_handle(h);
@@ -456,29 +496,29 @@ short int netlink_loop(unsigned short int queuenum)
 
 	h = nfq_open();
 	if (!h) {
-		fprintf(stderr, "Error during nfq_open()\n");
+		fprintf(logfile, "Error during nfq_open()\n");
 		exit(-1);
 	}
 
 	if (nfq_unbind_pf(h, AF_INET) < 0) {
-		fprintf(stderr, "error during nfq_unbind_pf()\n");
+		fprintf(logfile, "error during nfq_unbind_pf()\n");
 		exit(-1);
 	}
 
 	if (nfq_bind_pf(h, AF_INET) < 0) {
-		fprintf(stderr, "Error during nfq_bind_pf()\n");
+		fprintf(logfile, "Error during nfq_bind_pf()\n");
 		exit(-1);
 	}
 
 	fprintf(logfile,"NFQUEUE: binding to queue '%hd'\n", queuenum);
 	qh = nfq_create_queue(h,  queuenum, &nfqueue_cb, NULL);
 	if (!qh) {
-		fprintf(stderr, "error during nfq_create_queue()\n");
+		fprintf(logfile, "error during nfq_create_queue()\n");
 		exit(-1);
 	}
 
 	if (nfq_set_mode(qh, NFQNL_COPY_PACKET, PAYLOADSIZE) < 0) {
-		fprintf(stderr, "can't set packet_copy mode\n");
+		fprintf(logfile, "can't set packet_copy mode\n");
 		exit(-1);
 	}
 
@@ -500,31 +540,58 @@ short int netlink_loop(unsigned short int queuenum)
 void print_options(void)
 {
 	printf("\nMoBlock %s by Morpheus",MB_VERSION);
-	printf("\nSyntax: MoBlock [-dnp] <blocklist> [-q 0-65535] <logfile>\n\n");
+	printf("\nSyntax: MoBlock -dnp <blocklist> [-b] [-q 0-65535] <logfile>\n\n");
 	printf("\t-d\tblocklist is an ipfilter.dat file\n");
 	printf("\t-n\tblocklist is a peerguardian 2.x file (.p2b)\n");
 	printf("\t-p\tblocklist is a peerguardian file (.p2p)\n");
-	printf("\t-q 0-65535 NFQUEUE number (as specified in --queue-num with iptables)\n");
+	printf("\t-q\t0-65535 NFQUEUE number (as specified in --queue-num with iptables)\n");
 }
 
+void on_quit()
+{
+	unlink(pidfile_name);
+}
 
 int main(int argc, char **argv)
 {
 	int ret=0;
 	unsigned short int queuenum=0;
-	
+
 	if (argc < 3) {
 		print_options();
 		exit(-1);
 	}
-  
+	if (access(pidfile_name,F_OK)==0) {
+		fprintf(stderr,"pid file %s exists. Not starting",pidfile_name);
+		exit(-1);
+	}
+	else {		//create pidfile
+		FILE *pid_file;
+		pid_t pid=getpid();
+		pid_file=fopen(pidfile_name,"w");
+		if (pid_file == NULL) {
+			fprintf(stderr, "Unable to create pid_file\n");
+			exit(-1);
+		}
+		fprintf(pid_file,"%i\n",pid);
+		fclose(pid_file);
+	}
+	
+	ret=atexit(on_quit);
+	if ( ret ) {
+		fprintf(stderr,"Cannot register exit function, terminating.\n");
+		exit(-1);
+	}
+
 	init_sa();
 	logfile=fopen(argv[argc-1],"a");
 	if (logfile == NULL) {
 	    fprintf(stderr, "Unable to open logfile %s\n", argv[argc-1]);
 	    exit(-1);
 	}
-	printf("* Logging to %s\n",argv[argc-1]);
+	logfile_name=malloc(strlen(argv[argc-1])+1);
+	strcpy(logfile_name,argv[argc-1]);
+	printf("* Logging to %s\n",logfile_name);
 	
 	while (1) {		//scan command line options
 		ret=getopt(argc, argv, "d:n:p:q:");
@@ -564,8 +631,7 @@ int main(int argc, char **argv)
 	printf("* Skipped useless ranges: %d\n", skipped_ranges);
 	fprintf(logfile,"Skipped useless ranges: %d\n", skipped_ranges);
 	fflush(NULL);
-	
-    netlink_loop(queuenum);
-	
+
+	netlink_loop(queuenum);
 	exit(0);
 }

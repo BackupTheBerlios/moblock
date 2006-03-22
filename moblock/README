@@ -1,5 +1,5 @@
 
-MoBlock README v0.7
+MoBlock README v0.8
 http://moblock.berlios.de
 
 .Introduction.
@@ -75,8 +75,19 @@ http://moblock.berlios.de
    Running two or more MoBlock instances to handle different queues was
    not tested, do it at your own risk!
 
-   A simple start script (MoBlock.sh) is provided that makes MoBlock
-   filter all new incoming and outgoing connections, both for tcp and udp.
+   A simple start script is provided that makes MoBlock filter all new
+   incoming and outgoing connections for all protocols. If you use the
+   new kernel interface use the MoBlock-nfq.sh script, if you use the old
+   one use the MoBlock-ipq.sh script.
+   If you want MoBlock not to filter traffic to specific ports (for ex.
+   you want to browse a website that is in your block list) you can edit
+   the start script to add ports you don't want to be filtered.
+   For the previuos example you will use:
+
+	WHITE_TCP_OUT="http"
+
+   It will make MoBlock to not filter OUTgoing TCP traffic to http port.
+   Other variables are for INcoming and ForWarded traffic, TCP and UDP.
 
    Warning: many block lists include the loopback address so you can have
    strange troubles accessing localhost services. I added in the start
@@ -91,39 +102,44 @@ http://moblock.berlios.de
 .Installation & Usage.
 
    Just untar somwhere.
-   To build MoBlock from sources just do:
-   
-   cd src
+   To build MoBlock from sources just do
+
    make
-   cp MoBlock ../
+
+   in the directory where you extracted it. If you want to compile using
+   the old libipq library you must edit the Makefile, on top of it you
+   will find detailed instructions.
 
    The static version was compiled on Slackware 10.2 with gcc 3.4.5, if you
-   don't want to install the libnetfilter libraries try it,just rename it
-   to "MoBlock".
+   don't want to install the libnetfilter libraries try it, just rename it
+   to "moblock".
 
-   To start it just launch MoBlock.sh as root, for example:
+   To start it just launch MoBlock-nfq.sh (if you use the new kernel
+   interface) or MoBlock-ipq.sh (if you use the old kernel interface) as root,
+   for example:
 
-   ./MoBlock.sh &
+   ./MoBlock-nfq.sh &
 
    By default it will load the block list from /etc/guarding.p2p and
-   will log its activity to ./MoBlock.log, you can edit MoBlock.sh if you
+   will log its activity to ./MoBlock.log, you can edit the script if you
    want to change them.
-   For example if you want to use new p2p.pdb files change this line into
-   the start script:
+   You can specify a whitelist of ports in the start script as explained
+   before.
+   If you want to use new p2p.pdb files change this line in the start script:
 
-	./MoBlock -p /etc/guarding.p2p MoBlock.log
+	./moblock -p /etc/guarding.p2p MoBlock.log
 
    into this:
 
-	./MoBlock -n /etc/p2p.p2b MoBlock.log
+	./moblock -n /etc/p2p.p2b MoBlock.log
 
    or if you want to use ipfilter.dat files:
 
-	./MoBlock -d /etc/ipfilter.dat MoBlock.log
+	./moblock -d /etc/ipfilter.dat MoBlock.log
 
    To specify a NFQUEUE queue number:
 
-	./MoBlock -p /etc/guarding.p2p -q 5 MoBlock.log
+	./moblock -p /etc/guarding.p2p -q 5 MoBlock.log
 
    To stop it:
 
@@ -140,6 +156,9 @@ http://moblock.berlios.de
 
    kill -HUP <MoBlockPid>	# reloads blocklist and resets stats
 
+   Moreover when HUP or USR1 is received the log file will be reopened
+   to allow log file rotation.
+
 .Credits.
 
 - Thomas Niemann (thomasn at epaperpress.com) for the red/black trees
@@ -149,5 +168,7 @@ http://moblock.berlios.de
   took some code and ideas from his FTwall
 - Andrew de Quincey (adq at lidskialf dot net) for regular expressions
   and command line args patch
+- Maximilian Mehnert (clessing at freenet dot de) for logfile rotation
+  patches, pid file creation, start script, fixes/files for debian packaging
 
-Last Updated: 15/Feb/2006
+Last Updated: 20/Mar/2006

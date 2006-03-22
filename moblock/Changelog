@@ -4,6 +4,14 @@ http://moblock.berlios.de
 
 ---
 
+0.8: - support for NFQUEUE-ing from iptables FORWARD chain (thx to
+       hyakki for suggestions and testing!)
+     - included patches from Maximilian Mehnert to support log file
+       rotation, creation of pid file, fixes and files for debian
+       packaging and new start script supporting ports whitelisting
+
+---
+
 0.7: - loaded ranges are now automatically merged when overlapping
        or already included ranges are found (guarding.p2p files
        usually have many of these)

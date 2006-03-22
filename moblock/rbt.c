@@ -19,7 +19,7 @@
 #include <stdarg.h>
 #include <time.h>
 
-#define RBT_VERSION 0.7
+#define RBT_VERSION 0.8
 #define BNAME_LEN	80
 
 /* implementation dependend declarations */
@@ -521,5 +521,37 @@ statusEnum find(keyType key, recType *rec) {
                 current->left : current->right;
         }
     }
+    return STATUS_KEY_NOT_FOUND;
+}
+
+statusEnum find2(keyType key1, keyType key2, recType *rec) {
+
+   /*******************************
+    *  find node containing data  *
+    *******************************/
+
+    nodeType *current1 = root;
+	nodeType *current2 = root;
+	
+    while(current1 != NIL || current2 != NIL) {
+        if (current1 != NIL) {
+			if(compEQ2(key1, current1->key,current1->rec.ipmax)) {
+				ll_insert(current1);
+				(current1->rec.hits)++;
+				*rec = current1->rec;
+				lastFind = current1;
+				return STATUS_OK;
+			} else current1 = compLT (key1, current1->key) ? current1->left : current1->right;
+		}
+		if (current2 != NIL) {
+			if(compEQ2(key2, current2->key,current2->rec.ipmax)) {
+				ll_insert(current2);
+				(current2->rec.hits)++;
+				*rec = current2->rec;
+				lastFind = current2;
+				return STATUS_OK;
+			} else current2 = compLT (key2, current2->key) ? current2->left : current2->right;
+		}
+	}
     return STATUS_KEY_NOT_FOUND;
 }

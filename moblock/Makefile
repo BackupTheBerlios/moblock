@@ -8,18 +8,26 @@
 QUEUE_LIB=NFQUEUE
 
 CFLAGS=-Wall -O2 -march=i586 -mtune=i686 -fomit-frame-pointer -ffast-math \
-	-D_GNU_SOURCE -D$(QUEUE_LIB)
+	-D_GNU_SOURCE -D$(QUEUE_LIB) -L/usr/include/libipq
 CC=gcc
 
-all: MoBlock
+all: moblock
 
 
-MoBlock: MoBlock.o rbt.o
-	gcc -o $@ MoBlock.o rbt.o -lnetfilter_queue
+moblock: MoBlock.o rbt.o
+	gcc -o $@ MoBlock.o rbt.o -lnetfilter_queue -lnfnetlink
 	#gcc -o $@ MoBlock.o rbt.o -lipq
 	strip $@
-	
+
+moblock-static: MoBlock.o rbt.o
+	gcc -static -o $@ MoBlock.o rbt.o -lnetfilter_queue -lnfnetlink
+	#gcc -static -o $@ MoBlock.o rbt.o -lipq
+	strip $@
+
 clean:
-	rm -f *.o *~ *# MoBlock
+	rm -f *.o *~ *# moblock
+
+install:
+	install -m 755 moblock $(DESTDIR)/usr/bin
 
 .PHONY: clean
