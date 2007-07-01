@@ -46,7 +46,7 @@
 	#include <libnetfilter_queue/libnetfilter_queue.h>
 #endif
 
-#define MB_VERSION	"0.8"
+#define MB_VERSION	"0.9beta1"
 
 #define BUFSIZE		2048
 #define PAYLOADSIZE	21
@@ -57,6 +57,9 @@
 
 #define SRC_ADDR(payload) (*(in_addr_t *)((payload)+12))
 #define DST_ADDR(payload) (*(in_addr_t *)((payload)+16))
+
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
 
 // rbt datatypes/functions
 
@@ -96,7 +99,7 @@ struct {			//holds list type and filename
 	char filename[100];
 } blocklist_info;
 
-int merged_ranges=0, skipped_ranges=0;
+u_int32_t merged_ranges=0, skipped_ranges=0, accept_mark=0, reject_mark=0;
 
 #ifdef LIBIPQ
 static void die(struct ipq_handle *h)
@@ -389,23 +392,66 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 		switch (ph->hook) {
 			case NF_IP_LOCAL_IN:
 				if ( find(ntohl(SRC_ADDR(payload)),&tmprec) == STATUS_OK ) {
+					// we drop the packet instead of rejecting
+					// we don't want the other host to know we are alive
 					status=nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
 					fprintf(logfile,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR(payload)));
-				} else status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				}
+				else if ( unlikely(accept_mark) ) {
+					// we set the user-defined accept_mark and set NF_REPEAT verdict
+					// it's up to other iptables rules to decide what to do with this marked packet
+					status = nfq_set_verdict_mark(qh, id, NF_REPEAT, accept_mark, 0, NULL);
+				     }
+				     else {
+				     	// no accept_mark, just NF_ACCEPT the packet
+				     	status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				     }
 				break;
 			case NF_IP_LOCAL_OUT:
 				if ( find(ntohl(DST_ADDR(payload)),&tmprec) == STATUS_OK ) {
-					status=nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+					if ( likely(reject_mark) ) {
+						// we set the user-defined reject_mark and set NF_REPEAT verdict
+						// it's up to other iptables rules to decide what to do with this marked packet
+						status = nfq_set_verdict_mark(qh, id, NF_REPEAT, reject_mark, 0, NULL);
+					}
+					else {
+						status = nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+					}
 					fprintf(logfile,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR(payload)));
-				} else status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				}
+				else if ( unlikely(accept_mark) ) {
+					// we set the user-defined accept_mark and set NF_REPEAT verdict
+					// it's up to other iptables rules to decide what to do with this marked packet
+ 				        status = nfq_set_verdict_mark(qh, id, NF_REPEAT, accept_mark, 0, NULL);
+				     }
+				     else {
+					// no accept_mark, just NF_ACCEPT the packet
+					status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				     }
 				break;
 			case NF_IP_FORWARD:
 				if ( find2(ntohl(SRC_ADDR(payload)), ntohl(DST_ADDR(payload)), &tmprec) == STATUS_OK ) {
-					status=nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+					if ( likely(reject_mark) ) {
+						// we set the user-defined reject_mark and set NF_REPEAT verdict
+						// it's up to other iptables rules to decide what to do with this marked packet
+						status = nfq_set_verdict_mark(qh, id, NF_REPEAT, reject_mark, 0, NULL);
+					}
+					else {
+						status = nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+					}
 					fprintf(logfile,"Blocked FWD: %s,hits: %d,SRC: %s, DST: %s\n",
 								tmprec.blockname, tmprec.hits, ip2str(SRC_ADDR(payload)), ip2str(DST_ADDR(payload)));
 					fflush(logfile);
-				} else status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				}
+				else if ( unlikely(accept_mark) ) {
+					// we set the user-defined accept_mark and set NF_REPEAT verdict
+					// it's up to other iptables rules to decide what to do with this marked packet
+					status = nfq_set_verdict_mark(qh, id, NF_REPEAT, accept_mark, 0, NULL);
+				     }
+				     else {
+				     	// no accept_mark, just NF_ACCEPT the packet
+					status = nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+				     }
 				break;
 			default:
 				fprintf(logfile,"Not NF_LOCAL_IN/OUT/FORWARD packet!\n");
@@ -525,7 +571,7 @@ short int netlink_loop(unsigned short int queuenum)
 	nh = nfq_nfnlh(h);
 	fd = nfnl_fd(nh);
 
-	while ((rv = recv(fd, buf, sizeof(buf), 0)) && rv >= 0) {
+	while ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
 		nfq_handle_packet(h, buf, rv);
 	}
 
@@ -594,7 +640,7 @@ int main(int argc, char **argv)
 	printf("* Logging to %s\n",logfile_name);
 	
 	while (1) {		//scan command line options
-		ret=getopt(argc, argv, "d:n:p:q:");
+		ret=getopt(argc, argv, "d:n:p:q:a:r:");
 		if ( ret == -1 ) break;
 		
 		switch (ret) {
@@ -618,6 +664,16 @@ int main(int argc, char **argv)
 				break;
 			case 'q':
 				queuenum=(unsigned short int)atoi(optarg);
+				break;
+			case 'r':
+				reject_mark=(u_int32_t)atoi(optarg);
+				printf("* REJECT MARK: %d\n", reject_mark);
+				reject_mark=htonl(reject_mark);
+				break;
+			case 'a':
+				accept_mark=(u_int32_t)atoi(optarg);
+				printf("* ACCEPT MARK: %d\n", accept_mark);
+				accept_mark=htonl(accept_mark);
 				break;
 			case '?':			// unknown option
 				print_options();
