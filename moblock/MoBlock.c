@@ -46,7 +46,7 @@
 	#include <libnetfilter_queue/libnetfilter_queue.h>
 #endif
 
-#define MB_VERSION	"0.9beta1"
+#define MB_VERSION	"0.9beta2"
 
 #define BUFSIZE		2048
 #define PAYLOADSIZE	21
@@ -548,7 +548,7 @@ short int netlink_loop(unsigned short int queuenum)
 
 	if (nfq_unbind_pf(h, AF_INET) < 0) {
 		fprintf(logfile, "error during nfq_unbind_pf()\n");
-		exit(-1);
+		//exit(-1);
 	}
 
 	if (nfq_bind_pf(h, AF_INET) < 0) {
