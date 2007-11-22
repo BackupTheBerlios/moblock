@@ -1,4 +1,3 @@
-
 # To use the old-soon-to-be-deprecated libipq interface
 # uncomment the following line and comment the NFQUEUE one,
 # then comment the gcc line with netfilter_queue and
@@ -7,7 +6,7 @@
 #QUEUE_LIB=LIBIPQ
 QUEUE_LIB=NFQUEUE
 
-CFLAGS=-Wall -O2 -march=i586 -mtune=i686 -fomit-frame-pointer -ffast-math \
+CFLAGS=-Wall -O3 -march=i586 -mtune=i686 -fomit-frame-pointer -ffast-math \
 	-D_GNU_SOURCE -D$(QUEUE_LIB) -L/usr/include/libipq
 CC=gcc
 

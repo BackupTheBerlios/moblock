@@ -79,7 +79,7 @@ iptables -I OUTPUT -p all -m state --state NEW -m mark --mark $REJECT_MARK -j RE
 iptables -I FORWARD -p all -m state --state NEW -m mark --mark $REJECT_MARK -j REJECT
 
 # Here you can change block list and log files
-./moblock -p /etc/guarding.p2p -r $REJECT_MARK ./moblock.log
+./moblock -d /etc/ipfilter.dat -t -s -r $REJECT_MARK ./moblock.log
 
 # On exit delete the rules we added
 

@@ -4,6 +4,18 @@ http://moblock.berlios.de
 
 ---
 
+0.9: - fix for kernel 2.6.23
+	 - support for MARKing packets instead of DROPping or
+	   ACCEPTing
+	 - example start script that REJECTs packets instead of
+	   DROPping.
+	 - Integrated a patch from David Walluck for proper loading
+	   of p2b files (version 2)
+	 - command line options for logging to syslog, stdout
+	   and log timestamping
+
+---
+
 0.8: - support for NFQUEUE-ing from iptables FORWARD chain (thx to
        hyakki for suggestions and testing!)
      - included patches from Maximilian Mehnert to support log file

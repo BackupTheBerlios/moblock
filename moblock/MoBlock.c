@@ -35,6 +35,8 @@
 #include <linux/netfilter_ipv4.h>
 #include <signal.h>
 #include <regex.h>
+#include <time.h>
+#include <syslog.h>
 
 // in Makefile define LIBIPQ to use soon-to-be-deprecated ip_queue,
 // NFQUEUE for ipt_NFQUEUE (from kernel 2.6.14)
@@ -46,7 +48,7 @@
 	#include <libnetfilter_queue/libnetfilter_queue.h>
 #endif
 
-#define MB_VERSION	"0.9beta2"
+#define MB_VERSION	"0.9rc1"
 
 #define BUFSIZE		2048
 #define PAYLOADSIZE	21
@@ -100,6 +102,7 @@ struct {			//holds list type and filename
 } blocklist_info;
 
 u_int32_t merged_ranges=0, skipped_ranges=0, accept_mark=0, reject_mark=0;
+u_int8_t log2syslog=0, log2file=0, log2stdout=0, timestamp=0;
 
 #ifdef LIBIPQ
 static void die(struct ipq_handle *h)
@@ -137,10 +140,38 @@ void print_addr( FILE *f, in_addr_t ip, int port )
 	fflush(stdout);
 }
 
+void log_action(char *msg)
+{
+	char timestr[30];
+	time_t tv;
+
+	if (timestamp) {
+		tv = time(NULL);
+		strncpy(timestr, ctime(&tv), 19);
+		timestr[19] = '\0';
+		strcat(timestr, " ");
+	}
+	else strcpy(timestr, "");
+
+	if (log2syslog) {
+		syslog(LOG_INFO, msg);
+	}
+
+	if (log2file) {
+		fprintf(logfile,"%s%s",timestr,msg);
+		fflush(logfile);
+	}
+
+	if (log2stdout) {
+		fprintf(stdout,"%s%s",timestr,msg);
+	}
+}
+
 inline void ranged_insert(char *name,char *ipmin,char *ipmax)
 {
     recType tmprec;
     int ret;
+    char msgbuf[255];
 
 	if ( strlen(name) > (BNAME_LEN-1) ) {
 		strncpy(tmprec.blockname, name, BNAME_LEN);
@@ -152,10 +183,11 @@ inline void ranged_insert(char *name,char *ipmin,char *ipmax)
     if ( (ret=insert(ntohl(inet_addr(ipmin)),&tmprec)) != STATUS_OK  )
         switch(ret) {
             case STATUS_MEM_EXHAUSTED:
-                fprintf(logfile,"Error inserting range, MEM_EXHAUSTED.\n");
+                log_action("Error inserting range, MEM_EXHAUSTED.\n");
                 break;
             case STATUS_DUPLICATE_KEY:
-                fprintf(logfile,"Duplicated range ( %s )\n",name);
+                sprintf(msgbuf,"Duplicated range ( %s )\n",name);
+                log_action(msgbuf);
                 break;
 			case STATUS_MERGED:
 				merged_ranges++;
@@ -164,8 +196,9 @@ inline void ranged_insert(char *name,char *ipmin,char *ipmax)
 				skipped_ranges++;
 				break;
             default:
-                fprintf(logfile,"Unexpected return value from ranged_insert()!\n");
-                fprintf(logfile,"Return value was: %d\n",ret);
+                log_action("Unexpected return value from ranged_insert()!\n");
+                sprintf(msgbuf,"Return value was: %d\n",ret);
+                log_action(msgbuf);
                 break;
         }                
 }
@@ -180,12 +213,14 @@ void loadlist_pg1(char* filename)
 	regex_t regmain;
 	regmatch_t matches[4];
 	int i;
+	char msgbuf[255];
 
 	regcomp(&regmain, "^(.*)[:]([0-9.]*)[-]([0-9.]*)$", REG_EXTENDED);
 
 	fp=fopen(filename,"r");
 	if ( fp == NULL ) {
-		fprintf(logfile,"Error opening %s, aborting...\n", filename);
+		sprintf(msgbuf,"Error opening %s, aborting...\n", filename);
+		log_action(msgbuf);
 		exit(-1);
 	}
 	while ( (count=getline(&line,&len,fp)) != -1 ) {
@@ -210,36 +245,78 @@ void loadlist_pg1(char* filename)
 				      line+matches[3].rm_so);
 			ntot++;
 		} else {
-			fprintf(logfile,"Short guarding.p2p line %s, skipping it...\n", line);
+			sprintf(msgbuf,"Short guarding.p2p line %s, skipping it...\n", line);
+			log_action(msgbuf);
 		}
 	}
 	if (line)
 		free(line);
 	fclose(fp);
-	fprintf(logfile,"Ranges loaded: %d\n",ntot);
-	printf("* Ranges loaded: %d\n",ntot);
+	sprintf(msgbuf, "* Ranges loaded: %d\n", ntot);
+	log_action(msgbuf);
+	if ( !log2stdout )
+		printf(msgbuf);
 }
 
-void loadlist_pg2(char *filename)		// experimental, no check for list sanity
+void loadlist_pg2(char *filename)		// supports only v2 files
 {
     FILE *fp;
-    int i,retval,ntot=0;
-    char name[100],ipmin[16];			// hope we don't have a list with longer names...
+    int i, j, c, retval=0, ntot=0;
+    char name[100],ipmin[16], msgbuf[255];	// hope we don't have a list with longer names...
     uint32_t start_ip, end_ip;
     struct in_addr startaddr,endaddr;
+	size_t s;
 
     fp=fopen(filename,"r");
     if ( fp == NULL ) {
-        fprintf(logfile,"Error opening %s, aborting...\n", filename);
+        sprintf(msgbuf, "Error opening %s, aborting...\n", filename);
+        log_action(msgbuf);
         exit(-1);
     }
 
-    fgetc(fp);					// skip first 4 bytes, don't know what they are
-    fgetc(fp);
-    fgetc(fp);
-    retval=fgetc(fp);
+	for (j=0; j<4; j++) {
+		c=fgetc(fp);
+		if ( c != 0xff ) {
+			sprintf(msgbuf,"Byte %d: 0x%x != 0xff, aborting...\n", j+1, c);
+			log_action(msgbuf);
+			fclose(fp);
+			exit(-1);
+		}
+	}
+	
+	c=fgetc(fp);
+	if ( c != 'P' ) {
+		sprintf(msgbuf,"Byte 5: %c != P, aborting...\n", c);
+		log_action(msgbuf);
+		fclose(fp);
+		exit(-1);
+	}
 
-    while ( retval != EOF ) {
+	c=fgetc(fp);
+	if ( c != '2' ) {
+		sprintf(msgbuf,"Byte 6: %c != 2, aborting...\n", c);
+		log_action(msgbuf);
+		fclose(fp);
+		exit(-1);
+	}
+
+	c=fgetc(fp);
+	if ( c != 'B' ) {
+		sprintf(msgbuf,"Byte 7: %c != B, aborting...\n", c);
+		log_action(msgbuf);
+		fclose(fp);
+		exit(-1);
+	}
+
+	c=fgetc(fp);
+	if ( c != 0x02 ) {
+		sprintf(msgbuf,"Byte 8: version: %d != 2, aborting...\n", c);
+		log_action(msgbuf);
+		fclose(fp);
+		exit(-1);
+	}
+
+	do {
         i=0;
         do {
             name[i]=fgetc(fp);
@@ -247,9 +324,22 @@ void loadlist_pg2(char *filename)		// experimental, no check for list sanity
         } while ( name[i-1] != 0x00 && name[i-1] != EOF);
         if ( name[i-1] != EOF ) {
             name[i-1]='\0';
-            fread(&start_ip,4,1,fp);
-            fread(&end_ip,4,1,fp);
-            startaddr.s_addr=start_ip;
+			s=fread(&start_ip,4,1,fp);
+			if ( s != 1 ) {
+				sprintf(msgbuf,"Failed to read start IP: %d != 1, aborting...\n", (int)s);
+				log_action(msgbuf);
+                fclose(fp);
+                exit(-1);
+            }
+            s=fread(&end_ip,4,1,fp);
+            if ( s != 1 ) {
+                sprintf(msgbuf,"Failed to read end IP: %d != 1, aborting...\n", (int)s);
+				log_action(msgbuf);
+                fclose(fp);
+                exit(-1);
+            }
+			
+			startaddr.s_addr=start_ip;
             endaddr.s_addr=end_ip;
             strcpy(ipmin,inet_ntoa(startaddr));
             ranged_insert(name,ipmin,inet_ntoa(endaddr));
@@ -258,22 +348,25 @@ void loadlist_pg2(char *filename)		// experimental, no check for list sanity
         else {
             retval=EOF;
         }
-    }
+    } while ( retval != EOF );
     fclose(fp);
-    fprintf(logfile,"Ranges loaded: %d\n",ntot);
-	printf("* Ranges loaded: %d\n",ntot);
+    sprintf(msgbuf, "* Ranges loaded: %d\n",ntot);
+    log_action(msgbuf);
+	if ( !log2stdout )
+		printf(msgbuf);
 }
 
 void loadlist_dat(char *filename)
 {
     FILE *fp;
     int ntot=0;
-    char readbuf[200], *name, start_ip[16], end_ip[16];
+    char readbuf[200], *name, start_ip[16], end_ip[16], msgbuf[255];
     unsigned short ip1_0, ip1_1, ip1_2, ip1_3, ip2_0, ip2_1, ip2_2, ip2_3;
     
     fp=fopen(filename,"r");
     if ( fp == NULL ) {
-        fprintf(logfile,"Error opening %s, aborting...\n", filename);
+        sprintf(msgbuf,"Error opening %s, aborting...\n", filename);
+        log_action(msgbuf);
         exit(-1);
     }
     
@@ -289,38 +382,45 @@ void loadlist_dat(char *filename)
         ntot++;
     }
     fclose(fp);
-    fprintf(logfile,"Ranges loaded: %d\n",ntot);
-	printf("* Ranges loaded: %d\n",ntot);
+    sprintf(msgbuf, "* Ranges loaded: %d\n", ntot);
+    log_action(msgbuf);
+	if ( !log2stdout )
+		printf(msgbuf);
 }
 
 void reopen_logfile(void)
 {
+	char msgbuf[255];
+
 	if (logfile != NULL) {
         	fclose(logfile);
 		logfile=NULL;
 	}
 	logfile=fopen(logfile_name,"a");
 	if (logfile == NULL) {
-		fprintf(stderr, "Unable to open logfile %s\n", logfile_name);
+		sprintf(msgbuf, "Unable to open logfile %s\n", logfile_name);
+		log_action(msgbuf);
 		exit(-1);
 	}
-	fprintf(logfile, "Reopening logfile.\n");
+	log_action("Reopening logfile.\n");
 }
 
 void my_sahandler(int sig)
 {
+	char msgbuf[255];
+
 	switch( sig ) {
         	case SIGUSR1:
-			fprintf(logfile,"Got SIGUSR1! Dumping stats...\n");
+			log_action("Got SIGUSR1! Dumping stats...\n");
 			ll_show(logfile);
 			reopen_logfile();
 			break;
 		case SIGUSR2:
-			fprintf(logfile,"Got SIGUSR2! Dumping stats to /var/log/MoBlock.stats\n");
+			log_action("Got SIGUSR2! Dumping stats to /var/log/MoBlock.stats\n");
 			ll_log();
 			break;
 		case SIGHUP:
-			fprintf(logfile,"\nGot SIGHUP! Dumping and resetting stats, reloading blocklist\n\n");
+			log_action("Got SIGHUP! Dumping and resetting stats, reloading blocklist\n");
 			ll_log();
 			ll_clear();		// clear stats list
 			destroy_tree();		// clear loaded ranges
@@ -335,17 +435,18 @@ void my_sahandler(int sig)
 					loadlist_pg2(blocklist_info.filename);
 					break;
 				default:
-					fprintf(logfile,"Unknown blocklist type while reloading list, contact the developer!\n");
+					log_action("Unknown blocklist type while reloading list, contact the developer!\n");
 					break;
 			}
 			reopen_logfile();
 			break;
 		case SIGTERM:
-			fprintf(logfile,"Got SIGTERM! Dumping stats and exiting.\n");
+			log_action("Got SIGTERM! Dumping stats and exiting.\n");
 			ll_log();
 			exit(0);
 		default:
-			fprintf(logfile,"Received signal = %d but not handled\n",sig);
+			sprintf(msgbuf,"Received signal = %d but not handled\n",sig);
+			log_action(msgbuf);
 			break;
 	}
 }
@@ -381,7 +482,7 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 {
 	int id=0, status=0;
 	struct nfqnl_msg_packet_hdr *ph;
-	char *payload;
+	char *payload, msgbuf[255];
 	recType tmprec;
 
 	ph = nfq_get_msg_packet_hdr(nfa);
@@ -395,7 +496,8 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 					// we drop the packet instead of rejecting
 					// we don't want the other host to know we are alive
 					status=nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
-					fprintf(logfile,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR(payload)));
+					sprintf(msgbuf,"Blocked IN: %s,hits: %d,SRC: %s\n",tmprec.blockname,tmprec.hits,ip2str(SRC_ADDR(payload)));
+					log_action(msgbuf);
 				}
 				else if ( unlikely(accept_mark) ) {
 					// we set the user-defined accept_mark and set NF_REPEAT verdict
@@ -417,7 +519,8 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 					else {
 						status = nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
 					}
-					fprintf(logfile,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR(payload)));
+					sprintf(msgbuf,"Blocked OUT: %s,hits: %d,DST: %s\n",tmprec.blockname,tmprec.hits,ip2str(DST_ADDR(payload)));
+					log_action(msgbuf);
 				}
 				else if ( unlikely(accept_mark) ) {
 					// we set the user-defined accept_mark and set NF_REPEAT verdict
@@ -439,9 +542,9 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 					else {
 						status = nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
 					}
-					fprintf(logfile,"Blocked FWD: %s,hits: %d,SRC: %s, DST: %s\n",
+					sprintf(msgbuf,"Blocked FWD: %s,hits: %d,SRC: %s, DST: %s\n",
 								tmprec.blockname, tmprec.hits, ip2str(SRC_ADDR(payload)), ip2str(DST_ADDR(payload)));
-					fflush(logfile);
+					log_action(msgbuf);
 				}
 				else if ( unlikely(accept_mark) ) {
 					// we set the user-defined accept_mark and set NF_REPEAT verdict
@@ -454,15 +557,14 @@ static int nfqueue_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 				     }
 				break;
 			default:
-				fprintf(logfile,"Not NF_LOCAL_IN/OUT/FORWARD packet!\n");
+				log_action("Not NF_LOCAL_IN/OUT/FORWARD packet!\n");
 				break;
 		}
 	}
 	else {
-		fprintf(logfile,"NFQUEUE: can't get msg packet header.\n");
+		log_action("NFQUEUE: can't get msg packet header.\n");
 		return(1);		// from nfqueue source: 0 = ok, >0 = soft error, <0 hard error
 	}
-	fflush(logfile);
 	return(0);
 }
 #endif
@@ -538,33 +640,34 @@ short int netlink_loop(unsigned short int queuenum)
 	struct nfq_q_handle *qh;
 	struct nfnl_handle *nh;
 	int fd,rv;
-	char buf[BUFSIZE];
+	char buf[BUFSIZE], msgbuf[255];
 
 	h = nfq_open();
 	if (!h) {
-		fprintf(logfile, "Error during nfq_open()\n");
+		log_action("Error during nfq_open()\n");
 		exit(-1);
 	}
 
 	if (nfq_unbind_pf(h, AF_INET) < 0) {
-		fprintf(logfile, "error during nfq_unbind_pf()\n");
+		log_action("error during nfq_unbind_pf()\n");
 		//exit(-1);
 	}
 
 	if (nfq_bind_pf(h, AF_INET) < 0) {
-		fprintf(logfile, "Error during nfq_bind_pf()\n");
+		log_action("Error during nfq_bind_pf()\n");
 		exit(-1);
 	}
 
-	fprintf(logfile,"NFQUEUE: binding to queue '%hd'\n", queuenum);
+	sprintf(msgbuf,"NFQUEUE: binding to queue '%hd'\n", queuenum);
+	log_action(msgbuf);
 	qh = nfq_create_queue(h,  queuenum, &nfqueue_cb, NULL);
 	if (!qh) {
-		fprintf(logfile, "error during nfq_create_queue()\n");
+		log_action("error during nfq_create_queue()\n");
 		exit(-1);
 	}
 
 	if (nfq_set_mode(qh, NFQNL_COPY_PACKET, PAYLOADSIZE) < 0) {
-		fprintf(logfile, "can't set packet_copy mode\n");
+		log_action("can't set packet_copy mode\n");
 		exit(-1);
 	}
 
@@ -575,9 +678,10 @@ short int netlink_loop(unsigned short int queuenum)
 		nfq_handle_packet(h, buf, rv);
 	}
 
-	printf("NFQUEUE: unbinding from queue 0\n");
+	log_action("NFQUEUE: unbinding from queue 0\n");
 	nfq_destroy_queue(qh);
 	nfq_close(h);
+	nfq_unbind_pf(h, AF_INET);
 	return(0);
 #endif
 
@@ -586,11 +690,16 @@ short int netlink_loop(unsigned short int queuenum)
 void print_options(void)
 {
 	printf("\nMoBlock %s by Morpheus",MB_VERSION);
-	printf("\nSyntax: MoBlock -dnp <blocklist> [-b] [-q 0-65535] <logfile>\n\n");
+	printf("\nSyntax: MoBlock -dnp <blocklist> [-q 0-65535] <logfile>\n\n");
 	printf("\t-d\tblocklist is an ipfilter.dat file\n");
 	printf("\t-n\tblocklist is a peerguardian 2.x file (.p2b)\n");
 	printf("\t-p\tblocklist is a peerguardian file (.p2p)\n");
 	printf("\t-q\t0-65535 NFQUEUE number (as specified in --queue-num with iptables)\n");
+	printf("\t-r MARK\tmark packet with MARK instead of DROP\n");
+	printf("\t-a MARK\tmark packet with MARK instead of ACCEPT\n");
+	printf("\t-l\tlog to stdout\n");
+	printf("\t-s\tlog to syslog\n");
+	printf("\t-t\tlog timestamping\n\n");
 }
 
 void on_quit()
@@ -602,6 +711,7 @@ int main(int argc, char **argv)
 {
 	int ret=0;
 	unsigned short int queuenum=0;
+	char msgbuf[255];
 
 	if (argc < 3) {
 		print_options();
@@ -637,10 +747,11 @@ int main(int argc, char **argv)
 	}
 	logfile_name=malloc(strlen(argv[argc-1])+1);
 	strcpy(logfile_name,argv[argc-1]);
+	log2file = 1;
 	printf("* Logging to %s\n",logfile_name);
 	
 	while (1) {		//scan command line options
-		ret=getopt(argc, argv, "d:n:p:q:a:r:");
+		ret=getopt(argc, argv, "d:n:p:q:a:r:stl");
 		if ( ret == -1 ) break;
 		
 		switch (ret) {
@@ -667,13 +778,25 @@ int main(int argc, char **argv)
 				break;
 			case 'r':
 				reject_mark=(u_int32_t)atoi(optarg);
-				printf("* REJECT MARK: %d\n", reject_mark);
+				printf("* DROP MARK: %d\n", reject_mark);
 				reject_mark=htonl(reject_mark);
 				break;
 			case 'a':
 				accept_mark=(u_int32_t)atoi(optarg);
 				printf("* ACCEPT MARK: %d\n", accept_mark);
 				accept_mark=htonl(accept_mark);
+				break;
+			case 's':
+				log2syslog = 1;
+				printf("* Logging to syslog\n");
+				break;
+			case 't':
+				timestamp = 1;
+				printf("* Log timestamp enabled\n");
+				break;
+			case 'l':
+				log2stdout = 1;
+				printf("* Log to stdout enabled\n");
 				break;
 			case '?':			// unknown option
 				print_options();
@@ -682,10 +805,14 @@ int main(int argc, char **argv)
 		}
 	}
 	
-	printf("* Merged ranges: %d\n", merged_ranges);
-	fprintf(logfile, "Merged ranges: %d\n", merged_ranges);
-	printf("* Skipped useless ranges: %d\n", skipped_ranges);
-	fprintf(logfile,"Skipped useless ranges: %d\n", skipped_ranges);
+	sprintf(msgbuf, "* Merged ranges: %d\n", merged_ranges);
+	log_action(msgbuf);
+	if ( !log2stdout )
+		printf(msgbuf);
+	sprintf(msgbuf,"* Skipped useless ranges: %d\n", skipped_ranges);
+	log_action(msgbuf);
+	if ( !log2stdout )
+		printf(msgbuf);
 	fflush(NULL);
 
 	netlink_loop(queuenum);

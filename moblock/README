@@ -1,5 +1,5 @@
 
-MoBlock README v0.8
+MoBlock README v0.9
 http://moblock.berlios.de
 
 .Introduction.
@@ -47,6 +47,22 @@ http://moblock.berlios.de
 	ip_conntrack           40044  1 ipt_state
 	iptable_filter          2176  1
 	ip_tables              17600  3 ipt_NFQUEUE,ipt_state,iptable_filter
+	
+	...and these with kernel 2.6.23 using NFQUEUE interface:
+	
+	nfnetlink_queue         9344  1
+	nfnetlink               4568  2 nfnetlink_queue
+	ipt_REJECT              3520  2
+	xt_mark                 1600  2
+	nf_conntrack_ipv4      12424  5
+	iptable_filter          2308  1
+	ip_tables              10328  1 iptable_filter
+	xt_state                1984  5
+	nf_conntrack           48356  2 nf_conntrack_ipv4,xt_state
+	xt_NFQUEUE              1664  3
+	x_tables               11396  5 ipt_REJECT,xt_mark,ip_tables,xt_state,xt_NFQUEUE
+	
+	(notice that ipt_NFQUEUE has changed to xt_NFQUEUE, same thing for other modules too)
 
 2) A valid guarding.p2p/ipfilter.dat/p2p.p2b host file in /etc ( /etc/guarding.p2p ).
    MoBlock tries to skip malformed or duplicate ranges but
@@ -140,8 +156,18 @@ http://moblock.berlios.de
    To specify a NFQUEUE queue number:
 
 	./moblock -p /etc/guarding.p2p -q 5 MoBlock.log
+	
+   From version 0.9 MoBlock supports MARKing packets and RETURN them to
+   iptables, there's an example start script (MoBlock-nfq-reject.sh) that
+   uses this feature to REJECT packet instead of dropping them. It can help
+   in complex firewall configuration where you need more control of packets
+   flow after MoBlock inspection.
+   See the mentioned start script for reference, you can set the MARK value
+   for packets that MoBlock would drop (ip in list) with the "-r" command line
+   option and for packets that MoBlock would accept (ip not in list) with
+   the "-a" command line option.
 
-   To stop it:
+   To stop MoBlock:
 
    kill -TERM <MoBlockPid>
 
@@ -149,7 +175,7 @@ http://moblock.berlios.de
    To obtain stats about blocked ranges while it's running:
 
    kill -USR1 <MoBlockPid>	# write stats to logfile
-   kill -USR2 <MoBlockPid>      # write stats to /var/log/MoBlock.stats
+   kill -USR2 <MoBlockPid>  # write stats to /var/log/MoBlock.stats
 
 ** NEW: to reload the blocklist while MoBlock is running send to it the
    HUP signal:
@@ -168,7 +194,10 @@ http://moblock.berlios.de
   took some code and ideas from his FTwall
 - Andrew de Quincey (adq at lidskialf dot net) for regular expressions
   and command line args patch
-- Maximilian Mehnert (clessing at freenet dot de) for logfile rotation
+- clessing at freenet dot de for logfile rotation
   patches, pid file creation, start script, fixes/files for debian packaging
+- David Walluck, patch for proper loading of p2b files
+- jre, for continuing clessing work on debian packaging and many other
+  contributions
 
-Last Updated: 20/Mar/2006
+Last Updated: 15/Oct/2007
