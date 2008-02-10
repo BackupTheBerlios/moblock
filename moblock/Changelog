@@ -13,6 +13,11 @@ http://moblock.berlios.de
 	   of p2b files (version 2)
 	 - command line options for logging to syslog, stdout
 	   and log timestamping
+	 - fixed loading pg1 lists with comments (lines starting
+	   with '#')
+	 - fixed a bug in ranges merge
+	 - applied patch 2223 by badfish99: "IPs logged with bytes
+	   reversed on big-endian m/c"
 
 ---
 

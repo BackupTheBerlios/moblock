@@ -19,7 +19,7 @@
 #include <stdarg.h>
 #include <time.h>
 
-#define RBT_VERSION 0.8
+#define RBT_VERSION 0.9
 #define BNAME_LEN	80
 
 /* implementation dependend declarations */
@@ -421,7 +421,7 @@ statusEnum delete(keyType key) {
 
 statusEnum insert(keyType key, recType *rec) {
     nodeType *current, *parent, *x;
-	keyType tmpkey;
+	//keyType tmpkey;
 	recType tmprec;
 	int ret;
 	
@@ -433,6 +433,23 @@ statusEnum insert(keyType key, recType *rec) {
     current = root;
     parent = 0;
     while (current != NIL) {
+		if (compEQ2(current->key, key, rec->ipmax)) {	// current node key is inside new range to be inserted
+			strcpy(tmprec.blockname, rec->blockname);	// block name from new range
+			if (compLT(current->rec.ipmax, rec->ipmax))
+				tmprec.ipmax = rec->ipmax;
+			else tmprec.ipmax = current->rec.ipmax;
+			tmprec.hits = 0;
+			//printf("deleting node :%lu\n", current->key);
+			ret=delete(current->key);
+			if ( ret != STATUS_OK )
+				return(ret);
+			ret=insert(key, &tmprec);
+			if ( ret == STATUS_OK ) {
+				printf("new merge\n");
+				return(STATUS_MERGED);
+			}
+			else return(ret);
+		}
         if (compEQ(key, current->key)) {
 			if ( rec->ipmax > current->rec.ipmax ) {
 				current->rec.ipmax=rec->ipmax;
@@ -458,7 +475,7 @@ statusEnum insert(keyType key, recType *rec) {
 			}
 		}
 		//check if higher ip (ipmax) is already in a range
-		if (compEQ2(rec->ipmax,current->key,current->rec.ipmax)) {
+		/*if (compEQ2(rec->ipmax,current->key,current->rec.ipmax)) {
 			fprintf(logfile,"higher ip in range\n");
 			tmpkey=key;
 			strcpy(tmprec.blockname,current->rec.blockname);
@@ -470,7 +487,7 @@ statusEnum insert(keyType key, recType *rec) {
 			if ( ret == STATUS_OK )
 				return(STATUS_MERGED);
 			else return(ret);
-		}
+		}*/
         parent = current;
         current = compLT(key, current->key) ?
             current->left : current->right;
@@ -495,7 +512,7 @@ statusEnum insert(keyType key, recType *rec) {
     } else {
         root = x;
     }
-
+	//printf("new node, key: %lu, parent: %lu\n", x->key, parent ? parent->key : 0);
     insertFixup(x);
     lastFind = NULL;
 

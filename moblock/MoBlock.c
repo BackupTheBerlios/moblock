@@ -48,7 +48,7 @@
 	#include <libnetfilter_queue/libnetfilter_queue.h>
 #endif
 
-#define MB_VERSION	"0.9rc1"
+#define MB_VERSION	"0.9rc2"
 
 #define BUFSIZE		2048
 #define PAYLOADSIZE	21
@@ -118,11 +118,13 @@ char *ip2str(in_addr_t ip)
 	static char buf[2][ sizeof("aaa.bbb.ccc.ddd") ];
 	static short int index=0;
 	
+	ip = ntohl(ip);
+	
 	sprintf(buf[index],"%d.%d.%d.%d",
-			(ip) & 0xff,
-			(ip >> 8) & 0xff,
+			(ip >> 24) & 0xff,
 			(ip >> 16) & 0xff,
-			(ip >> 24) & 0xff);
+			(ip >> 8) & 0xff,
+			(ip) & 0xff);
 	
 	if (index) {
 		index=0;
@@ -149,7 +151,7 @@ void log_action(char *msg)
 		tv = time(NULL);
 		strncpy(timestr, ctime(&tv), 19);
 		timestr[19] = '\0';
-		strcat(timestr, " ");
+		strcat(timestr, "| ");
 	}
 	else strcpy(timestr, "");
 
@@ -224,6 +226,8 @@ void loadlist_pg1(char* filename)
 		exit(-1);
 	}
 	while ( (count=getline(&line,&len,fp)) != -1 ) {
+		if ( line[0] == '#' )		//comment line, skip
+			continue;
 		for(i=count-1; i>=0; i--) {
 			if ((line[i] == '\r') || (line[i] == '\n') || (line[i] == ' ')) {
 				line[i] = 0;
